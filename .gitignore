@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment & Config
+.env
+config/auth/
+*.access_token.txt
+*upstox_access_token.txt
+
+# Node
+node_modules/
+dist/
+.next/
+out/
+build/
+.turbo/
+
+# Logs
+logs/
+*.log
+
+# Databases
+*.sqlite
+*.db
+
+# IDE
+.vscode/
+.idea/
+.gemini/
+*.swp
+*.swo
