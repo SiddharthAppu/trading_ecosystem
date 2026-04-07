@@ -40,6 +40,8 @@ class FyersAdapter(BrokerAdapter):
         )
 
     def validate_token(self) -> bool:
+        # Hot-reload from disk to keep singletons in sync with CLI authentications
+        self._access_token = self._load_token()
         if not self._access_token:
             return False
         try:
@@ -145,10 +147,18 @@ class FyersAdapter(BrokerAdapter):
         if "NIFTY50" in underlying_symbol:
             base_symbol = "NIFTY"
 
-        # Simple conversion for Fyers expiry format (YYMMDD)
-        # e.g., 20MAR as expected
-        final_expiry = expiry_date
-        # (This remains as is from the original adapter for now)
+        # Convert YYYY-MM-DD to Fyers YY + MONTH_CODE + DD for weeklies natively recognized by the system
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', expiry_date):
+            from datetime import datetime
+            dt = datetime.strptime(expiry_date, "%Y-%m-%d")
+            yy = dt.strftime("%y")
+            dd = dt.strftime("%d")
+            months = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
+            mon_str = months[dt.month - 1]
+            m_code = MONTH_MAP[mon_str]
+            final_expiry = f"{yy}{m_code}{dd}"
+        else:
+            final_expiry = expiry_date
 
         symbols = []
         for offset in range(-strike_count, strike_count + 1):

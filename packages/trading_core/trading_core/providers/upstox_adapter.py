@@ -80,6 +80,8 @@ class UpstoxAdapter(BrokerAdapter):
         return payload
 
     def validate_token(self) -> bool:
+        # Hot-reload from disk to keep singletons in sync with CLI authentications
+        self._access_token = self._load_token()
         if not self._access_token:
             return False
         try:

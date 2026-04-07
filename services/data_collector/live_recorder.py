@@ -38,15 +38,21 @@ class LiveTickRecorder:
             pool = await self.connect_db()
             async with pool.acquire() as conn:
                 table = f"broker_{self.provider_name}.market_ticks"
-                await conn.executemany(f"INSERT INTO {table} (time, symbol, price) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", 
-                                      [(t[0], t[1], t[2]) for t in current_batch])
+                await conn.executemany(f"INSERT INTO {table} (time, symbol, price, volume, bid, ask) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING", 
+                                      [(t[0], t[1], t[2], t[3], t[4], t[5]) for t in current_batch])
                 # Broadcast
                 await self.event_queue.put({"type": "save", "ticks": len(current_batch), "symbols": len(set(t[1] for t in current_batch))})
 
     def _on_fyers_message(self, message):
         if not isinstance(message, dict) or message.get("type") in ("cn", "ful", "sub"): return
-        # Simple tick capture
-        self.tick_buffer.append((datetime.now(timezone.utc), message.get("symbol"), message.get("ltp")))
+        
+        # Fyers LiteMode=False provides rich market depth via these standard internal keys
+        vol = message.get("vol_traded_today", message.get("v", 0))
+        bid = message.get("bid_price", message.get("bp1", 0.0))
+        ask = message.get("ask_price", message.get("ap1", 0.0))
+        
+        # Complex tick capture
+        self.tick_buffer.append((datetime.now(timezone.utc), message.get("symbol"), message.get("ltp"), vol, bid, ask))
 
     async def start(self, provider: str = "fyers"):
         if self.is_running: return "Already running"

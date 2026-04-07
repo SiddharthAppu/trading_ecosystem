@@ -88,6 +88,16 @@ async def download_symbol(req: DownloadRequest):
     except Exception as e:
         raise HTTPException(500, str(e))
 
+@app.post("/recorder/start")
+async def start_recorder(provider: str = "fyers"):
+    status = await recorder_manager.start(provider)
+    return {"status": status}
+
+@app.post("/recorder/stop")
+async def stop_recorder(provider: str = "fyers"):
+    status = await recorder_manager.stop(provider)
+    return {"status": status}
+
 @app.get("/recorder/status")
 async def recorder_status(provider: str = "fyers"):
     return recorder_manager.get_status(provider)
