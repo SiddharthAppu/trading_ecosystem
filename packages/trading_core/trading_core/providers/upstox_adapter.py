@@ -121,23 +121,49 @@ class UpstoxAdapter(BrokerAdapter):
         return access_token
 
     def get_historical_data(self, symbol: str, start_date: str, end_date: str, resolution: str = "1"):
+        from datetime import datetime, timedelta
         instrument_key = UPSTOX_UNDERLYING_KEYS.get(symbol, symbol)
         interval = "1minute" if resolution in {"1", "1m"} else "day"
 
-        if interval == "1minute" and start_date == end_date and start_date == date.today().isoformat():
-            path = f"/v2/historical-candle/intraday/{quote(instrument_key, safe='')}/{interval}"
-        else:
-            path = f"/v2/historical-candle/{quote(instrument_key, safe='')}/{interval}/{end_date}/{start_date}"
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
-        response = self._request("GET", path)
-        candles = response.get("data", {}).get("candles", [])
-        
-        # Standardize for internally aligned downstream usage
         normalized = []
-        for candle in candles:
-            ts = int(datetime.fromisoformat(candle[0]).timestamp())
-            normalized.append([ts, candle[1], candle[2], candle[3], candle[4], candle[5]])
-        
+        current_start = start_dt
+
+        print(f"[*] Starting 30-day chunked download from {start_date} to {end_date}...")
+        while current_start <= end_dt:
+            current_end = min(current_start + timedelta(days=30), end_dt)
+            
+            # format required by Upstox history endpoint: YYYY-mm-dd
+            from_date_str = current_start.strftime("%Y-%m-%d")
+            to_date_str = current_end.strftime("%Y-%m-%d")
+            
+            print(f"  -> Fetching {from_date_str} to {to_date_str}...", end='\r', flush=True)
+
+            if interval == "1minute" and from_date_str == to_date_str and from_date_str == date.today().isoformat():
+                path = f"/v2/historical-candle/intraday/{quote(instrument_key, safe='')}/{interval}"
+            else:
+                path = f"/v2/historical-candle/{quote(instrument_key, safe='')}/{interval}/{to_date_str}/{from_date_str}"
+
+            try:
+                response = self._request("GET", path)
+                candles = response.get("data", {}).get("candles", [])
+                
+                # Upstox returns newest first; standardizing for internally aligned downstream usage
+                chunk_normalized = []
+                for candle in candles:
+                    ts = int(datetime.fromisoformat(candle[0]).timestamp())
+                    chunk_normalized.append([ts, candle[1], candle[2], candle[3], candle[4], candle[5]])
+                
+                normalized.extend(chunk_normalized)
+            except ValueError as e:
+                print(f"\n[WARN] Upstox history error for {symbol} ({from_date_str} to {to_date_str}): {str(e)}")
+                # Do not raise here so that we can skip gaps and fetch as much data as possible
+
+            current_start = current_end + timedelta(days=1)
+
+        print("\n[SUCCESS] Download stream complete.")
         normalized.sort(key=lambda x: x[0])
         return normalized
 

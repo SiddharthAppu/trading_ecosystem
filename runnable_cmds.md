@@ -75,10 +75,31 @@ Discovers and downloads an entire option chain for a specific expiry.
 .\services\data_collector\.venv\Scripts\python.exe scripts\quick_option_chain.py --underlying "NSE:NIFTY50-INDEX" --expiry "26MAR" --start 2026-03-24 --end 2026-03-24
 ```
 
-### 🗄️ Database Setup
-Manually initialize or verify TimescaleDB schemas and hypertables.
+### 🗄️ Database Management
+TimescaleDB must be explicitly managed to prevent freezes and ensure continuity. The `db_data/` and `db_backups/` folders are heavily git-ignored to prevent pushing massive datasets to cloud hosting.
+
+**1. Initialize DB / Safe Setup**  
+Initialize all tables and correct unique indexing logic (safe to run over existing data).
 ```powershell
 .\services\data_collector\.venv\Scripts\python.exe scripts\setup_db.py
+```
+
+**2. Continuity Gap Scanner**  
+Verifies if you have any missing calendar days or data leaks inside your downloaded charts.
+```powershell
+.\services\data_collector\.venv\Scripts\python.exe scripts\verify_db_gaps.py
+```
+
+**3. Snapshot Backup & Version Control**  
+Uses Docker natively to securely backup your full database into version-controlled `.sql` files without stopping your environment. Automatically purges old backups past limit.
+```powershell
+.\services\data_collector\.venv\Scripts\python.exe scripts\db_backup.py --max 5
+```
+
+**4. Nuclear Reset**  
+Drops all trading and option schemas permanently and rebuilds them. (WARNING: Wipes all historical data!)
+```powershell
+.\services\data_collector\.venv\Scripts\python.exe scripts\reset_db.py
 ```
 
 ## 📶 Service Management

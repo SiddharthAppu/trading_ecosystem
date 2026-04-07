@@ -21,7 +21,8 @@ class MigrationManager:
         price DOUBLE PRECISION,
         volume BIGINT,
         bid DOUBLE PRECISION,
-        ask DOUBLE PRECISION
+        ask DOUBLE PRECISION,
+        UNIQUE(time, symbol)
     );
     SELECT create_hypertable('broker_fyers.market_ticks', 'time', if_not_exists => TRUE);
 
@@ -31,7 +32,8 @@ class MigrationManager:
         price DOUBLE PRECISION,
         volume BIGINT,
         bid DOUBLE PRECISION,
-        ask DOUBLE PRECISION
+        ask DOUBLE PRECISION,
+        UNIQUE(time, symbol)
     );
     SELECT create_hypertable('broker_upstox.market_ticks', 'time', if_not_exists => TRUE);
 
@@ -43,7 +45,8 @@ class MigrationManager:
         high DOUBLE PRECISION,
         low DOUBLE PRECISION,
         close DOUBLE PRECISION,
-        volume BIGINT
+        volume BIGINT,
+        UNIQUE(time, symbol)
     );
     SELECT create_hypertable('broker_fyers.ohlcv_1m', 'time', if_not_exists => TRUE);
 
@@ -54,9 +57,40 @@ class MigrationManager:
         high DOUBLE PRECISION,
         low DOUBLE PRECISION,
         close DOUBLE PRECISION,
-        volume BIGINT
+        volume BIGINT,
+        UNIQUE(time, symbol)
     );
     SELECT create_hypertable('broker_upstox.ohlcv_1m', 'time', if_not_exists => TRUE);
+
+    -- Options OHLC Table (Hypertable)
+    CREATE TABLE IF NOT EXISTS broker_fyers.options_ohlc (
+        time TIMESTAMPTZ NOT NULL,
+        symbol TEXT NOT NULL,
+        open DOUBLE PRECISION,
+        high DOUBLE PRECISION,
+        low DOUBLE PRECISION,
+        close DOUBLE PRECISION,
+        volume BIGINT,
+        calc_implied_volatility DOUBLE PRECISION,
+        calc_delta DOUBLE PRECISION,
+        UNIQUE(time, symbol)
+    );
+    SELECT create_hypertable('broker_fyers.options_ohlc', 'time', if_not_exists => TRUE);
+
+    CREATE TABLE IF NOT EXISTS broker_upstox.options_ohlc (
+        time TIMESTAMPTZ NOT NULL,
+        symbol TEXT NOT NULL,
+        open DOUBLE PRECISION,
+        high DOUBLE PRECISION,
+        low DOUBLE PRECISION,
+        close DOUBLE PRECISION,
+        volume BIGINT,
+        calc_implied_volatility DOUBLE PRECISION,
+        calc_delta DOUBLE PRECISION,
+        UNIQUE(time, symbol)
+    );
+    SELECT create_hypertable('broker_upstox.options_ohlc', 'time', if_not_exists => TRUE);
+
 
     -- Options Greeks Table (Hypertable)
     CREATE TABLE IF NOT EXISTS analytics.options_greeks (

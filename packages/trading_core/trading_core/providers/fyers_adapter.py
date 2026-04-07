@@ -79,21 +79,43 @@ class FyersAdapter(BrokerAdapter):
         return self._access_token
 
     def get_historical_data(self, symbol: str, start_date: str, end_date: str, resolution: str = "1"):
+        from datetime import datetime, timedelta
         client = self._get_client()
-        payload = {
-            "symbol": symbol,
-            "resolution": resolution,
-            "date_format": "1",
-            "range_from": start_date,
-            "range_to": end_date,
-            "cont_flag": "0"
-        }
-        response = client.history(payload)
-        if response.get("s") == "ok":
-            return response.get("candles", [])
         
-        err_msg = response.get("message", "Unknown Fyers error")
-        raise ValueError(f"Fyers history error for {symbol}: {err_msg} (Status: {response.get('s')})")
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        
+        all_candles = []
+        current_start = start_dt
+        
+        print(f"[*] Starting 90-day chunked download from {start_date} to {end_date}...")
+        while current_start <= end_dt:
+            current_end = min(current_start + timedelta(days=90), end_dt)
+            
+            print(f"  -> Fetching {current_start.strftime('%Y-%m-%d')} to {current_end.strftime('%Y-%m-%d')}...", end='\r', flush=True)
+            
+            payload = {
+                "symbol": symbol,
+                "resolution": resolution,
+                "date_format": "1",
+                "range_from": current_start.strftime("%Y-%m-%d"),
+                "range_to": current_end.strftime("%Y-%m-%d"),
+                "cont_flag": "0"
+            }
+            response = client.history(payload)
+            
+            if response.get("s") == "ok":
+                all_candles.extend(response.get("candles", []))
+            else:
+                err_msg = response.get("message", "Unknown Fyers error")
+                print(f"\n[WARN] Fyers history error for {symbol} ({payload['range_from']} to {payload['range_to']}): {err_msg} (Status: {response.get('s')})")
+                if not all_candles:
+                    raise ValueError(f"Fyers history error: {err_msg}")
+            
+            current_start = current_end + timedelta(days=1)
+            
+        print("\n[SUCCESS] Download stream complete.")
+        return all_candles
 
     def get_quotes(self, symbols: list[str]):
         client = self._get_client()

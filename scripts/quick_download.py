@@ -64,13 +64,23 @@ async def main():
                     records.append((dt, args.symbol, c[1], c[2], c[3], c[4], c[5]))
                 
                 query = f"""
-                    INSERT INTO {full_table} (time, provider_symbol, open, high, low, close, volume)
+                    INSERT INTO {full_table} (time, symbol, open, high, low, close, volume)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT (time, provider_symbol) DO UPDATE SET
+                    ON CONFLICT (time, symbol) DO UPDATE SET
                     open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, close=EXCLUDED.close, volume=EXCLUDED.volume
                 """
-                await conn.executemany(query, records)
-            print(f"[SUCCESS] {len(data)} records successfully persisted.")
+                
+                # Chunk insertion to prevent DB freeze/OOM on massive queries
+                chunk_size = 1000
+                total_records = len(records)
+                print(f"[*] Starting batched database insertion ({chunk_size} rows/batch)...")
+                
+                for i in range(0, total_records, chunk_size):
+                    batch = records[i:i + chunk_size]
+                    await conn.executemany(query, batch)
+                    print(f"  -> Inserted {min(i + chunk_size, total_records)} / {total_records} records...")
+                
+            print(f"\n[SUCCESS] {total_records} records successfully persisted.")
         else:
             print("[INFO] Database saving skipped (--no-db used).")
 

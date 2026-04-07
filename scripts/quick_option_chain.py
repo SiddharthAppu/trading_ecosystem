@@ -65,9 +65,9 @@ async def main():
                         records.append((dt, sym, c[1], c[2], c[3], c[4], c[5]))
                     
                     query = f"""
-                        INSERT INTO {full_table} (time, provider_symbol, open, high, low, close, volume)
+                        INSERT INTO {full_table} (time, symbol, open, high, low, close, volume)
                         VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        ON CONFLICT (time, provider_symbol) DO UPDATE SET
+                        ON CONFLICT (time, symbol) DO UPDATE SET
                         open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, close=EXCLUDED.close, volume=EXCLUDED.volume
                     """
                     await conn.executemany(query, records)

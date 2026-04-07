@@ -40,6 +40,8 @@ logs/
 # Databases
 *.sqlite
 *.db
+db_data/
+db_backups/
 
 # IDE
 .vscode/
