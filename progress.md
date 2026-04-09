@@ -16,10 +16,16 @@ This document tracks the milestones achieved during the consolidation and develo
 - [x] **Shared Logic Extraction**: Initial `trading_core` package created.
 - [x] **Unified Configuration**: Core `.env` file for database and API credentials.
 - [x] **Master Startup Script**: `start_platform.bat` updated to launch all services.
+- [x] **Multi-Provider Expiry API**: Added `GET /expiries/list` in Data Collector for Fyers/Upstox expiry discovery.
+- [x] **Headless Expiry CLI**: Added `scripts/list_expiries.py` to fetch expiries for one provider or both.
+- [x] **Live Recorder Upgrade (CLI + Orchestration)**: `quick_live_recorder.py` now supports `--provider`, `--expiry`, `--strike-count`, and non-interactive mode.
+- [x] **Master Recorder Launcher**: Added `scripts/master_recorder.py` to start 8 recorder workers (4 expiries x 2 providers).
+- [x] **Live Greeks Capture + EOD Merge**: Recorder now persists provider Greeks into `broker_<provider>.options_greeks_live`, with merge utility `scripts/merge_provider_greeks_to_master.py` for `analytics.options_greeks_master`.
 
 ## 🛠 Currently In Progress
 - **Event Bus Integration**: Migrating all services to use the asynchronous event bus in `trading_core.events`.
 - **Dashboard UI Enhancements**: Finalizing the two-column layout in the Historical Dashboard for screenshot viewing.
+- **Provider Payload Parity Hardening**: Continue validating symbol-level payload differences and fallback extraction logic for both providers.
 
 ## 📅 Roadmap Overview
 1.  **Q2 2026**: Fully automated data recording and replay.
@@ -28,4 +34,4 @@ This document tracks the milestones achieved during the consolidation and develo
 4.  **Q4 2026**: Alpha release of Strategy Builder (Drag-and-Drop).
 
 ---
-*Last updated: 2026-04-06*
+*Last updated: 2026-04-08*

@@ -1,11 +1,12 @@
 import os
+import re
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime
+from typing import Optional, List, Dict, Any
+from datetime import datetime, timedelta
 import asyncpg
 
 from trading_core.providers import get_adapter
@@ -18,6 +19,45 @@ from trading_core.config import DB_URL
 from services.data_collector.live_recorder import recorder_manager
 
 app = FastAPI(title="Unified Data Collector API")
+
+IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_identifier(value: str, field_name: str) -> str:
+    if not value or not IDENTIFIER_RE.match(value):
+        raise HTTPException(400, f"Invalid {field_name}: {value!r}")
+    return value
+
+
+def _quote_ident(value: str) -> str:
+    return f'"{value}"'
+
+
+def _parse_datetime_input(value: str, field_name: str, end_of_day: bool = False) -> datetime:
+    text = (value or "").strip()
+    if not text:
+        raise HTTPException(400, f"{field_name} cannot be empty")
+    try:
+        if len(text) == 10:
+            dt = datetime.fromisoformat(f"{text}T00:00:00")
+            if end_of_day:
+                dt = dt + timedelta(days=1, microseconds=-1)
+            return dt
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as e:
+        raise HTTPException(400, f"Invalid {field_name}: {text!r}") from e
+
+
+def _gap_filter_sql_for_table(table_name: str) -> str:
+    # For 1m historical candles, ignore overnight/weekend boundaries when counting gaps.
+    if table_name == "ohlcv_1m":
+        return """
+          AND time::date = prev_time::date
+          AND EXTRACT(ISODOW FROM time) BETWEEN 1 AND 5
+          AND time::time BETWEEN TIME '09:15' AND TIME '15:30'
+          AND prev_time::time BETWEEN TIME '09:15' AND TIME '15:30'
+        """
+    return ""
 
 app.add_middleware(
     CORSMiddleware,
@@ -89,8 +129,8 @@ async def download_symbol(req: DownloadRequest):
         raise HTTPException(500, str(e))
 
 @app.post("/recorder/start")
-async def start_recorder(provider: str = "fyers"):
-    status = await recorder_manager.start(provider)
+async def start_recorder(provider: str = "fyers", mode: str = "lite"):
+    status = await recorder_manager.start(provider, mode)
     return {"status": status}
 
 @app.post("/recorder/stop")
@@ -121,6 +161,29 @@ async def generate_chain(req: ChainRequest):
     except Exception as e:
         raise HTTPException(500, str(e))
 
+@app.get("/expiries/list")
+async def list_expiries(provider: Optional[str] = None, underlying_symbol: str = "NSE:NIFTY50-INDEX"):
+    providers = [provider.lower()] if provider else ["fyers", "upstox"]
+    data = {}
+    errors = {}
+
+    for p in providers:
+        try:
+            adapter = get_adapter(p)
+            data[p] = adapter.get_option_expiries(underlying_symbol)
+        except Exception as e:
+            errors[p] = str(e)
+
+    if provider and provider.lower() in errors:
+        raise HTTPException(500, errors[provider.lower()])
+
+    return {
+        "status": "success" if not errors else "partial_success",
+        "underlying_symbol": underlying_symbol,
+        "data": data,
+        "errors": errors,
+    }
+
 @app.get("/index-ticks/recent")
 async def get_recent_index_ticks(limit: int = 20, provider: str = "fyers"):
     pool = await DatabaseManager.get_pool()
@@ -131,6 +194,331 @@ async def get_recent_index_ticks(limit: int = 20, provider: str = "fyers"):
             return {"status": "success", "ticks": [dict(r) for r in records]}
     except Exception as e:
         return {"status": "error", "message": str(e), "ticks": []}
+
+
+@app.get("/db/overview")
+async def db_overview(
+    schemas: str = Query("broker_fyers,broker_upstox,analytics"),
+    gap_minutes: int = Query(5, ge=1, le=1440),
+):
+    requested_schemas = [_validate_identifier(s.strip(), "schema") for s in schemas.split(",") if s.strip()]
+    if not requested_schemas:
+        raise HTTPException(400, "At least one schema must be provided")
+
+    pool = await DatabaseManager.get_pool()
+    async with pool.acquire() as conn:
+        db_name = await conn.fetchval("SELECT current_database()")
+        dbs = await conn.fetch(
+            """
+            SELECT datname
+            FROM pg_database
+            WHERE datistemplate = FALSE
+            ORDER BY datname
+            """
+        )
+
+        table_rows = await conn.fetch(
+            """
+            SELECT table_schema, table_name
+            FROM information_schema.tables
+            WHERE table_type = 'BASE TABLE'
+              AND table_schema = ANY($1::text[])
+            ORDER BY table_schema, table_name
+            """,
+            requested_schemas,
+        )
+
+        columns_rows = await conn.fetch(
+            """
+            SELECT table_schema, table_name, column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = ANY($1::text[])
+            ORDER BY table_schema, table_name, ordinal_position
+            """,
+            requested_schemas,
+        )
+
+        col_map: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
+        for row in columns_rows:
+            key = (row["table_schema"], row["table_name"])
+            col_map.setdefault(key, []).append(
+                {
+                    "name": row["column_name"],
+                    "type": row["data_type"],
+                    "nullable": row["is_nullable"] == "YES",
+                }
+            )
+
+        schema_payload: Dict[str, List[Dict[str, Any]]] = {s: [] for s in requested_schemas}
+        gap_interval = timedelta(minutes=gap_minutes)
+
+        for t in table_rows:
+            schema = t["table_schema"]
+            table = t["table_name"]
+            q_table = f"{_quote_ident(schema)}.{_quote_ident(table)}"
+            gap_filter_sql = _gap_filter_sql_for_table(table)
+
+            columns = col_map.get((schema, table), [])
+            col_names = {c["name"] for c in columns}
+            has_time = "time" in col_names
+            has_symbol = "symbol" in col_names
+
+            row_count = await conn.fetchval(f"SELECT COUNT(*)::bigint FROM {q_table}")
+
+            min_time = None
+            max_time = None
+            distinct_symbols = None
+            gap_events = None
+            max_gap_minutes = None
+
+            if has_time:
+                time_row = await conn.fetchrow(
+                    f"SELECT MIN(time) AS min_time, MAX(time) AS max_time FROM {q_table}"
+                )
+                min_time = time_row["min_time"]
+                max_time = time_row["max_time"]
+            if has_symbol:
+                distinct_symbols = await conn.fetchval(f"SELECT COUNT(DISTINCT symbol)::bigint FROM {q_table}")
+            if has_time and has_symbol:
+                gap_row = await conn.fetchrow(
+                    f"""
+                    WITH ordered AS (
+                        SELECT symbol, time,
+                               LAG(time) OVER (PARTITION BY symbol ORDER BY time) AS prev_time
+                        FROM {q_table}
+                    ), gaps AS (
+                        SELECT EXTRACT(EPOCH FROM (time - prev_time))/60.0 AS gap_min
+                        FROM ordered
+                        WHERE prev_time IS NOT NULL
+                                                    {gap_filter_sql}
+                          AND time - prev_time > $1::interval
+                    )
+                    SELECT COUNT(*)::bigint AS gap_events,
+                           MAX(gap_min) AS max_gap_minutes
+                    FROM gaps
+                    """,
+                    gap_interval,
+                )
+                gap_events = int(gap_row["gap_events"] or 0)
+                max_gap_minutes = float(gap_row["max_gap_minutes"]) if gap_row["max_gap_minutes"] is not None else None
+
+            schema_payload[schema].append(
+                {
+                    "table": table,
+                    "row_count": int(row_count or 0),
+                    "time_range": {
+                        "min": min_time,
+                        "max": max_time,
+                    } if has_time else None,
+                    "distinct_symbols": int(distinct_symbols) if distinct_symbols is not None else None,
+                    "gap_analysis": {
+                        "gap_minutes_threshold": gap_minutes,
+                        "gap_events": gap_events,
+                        "max_gap_minutes": max_gap_minutes,
+                    } if has_time and has_symbol else None,
+                    "columns": columns,
+                }
+            )
+
+    return {
+        "status": "success",
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "database": db_name,
+        "all_databases": [r["datname"] for r in dbs],
+        "schemas": [
+            {
+                "schema": s,
+                "table_count": len(schema_payload.get(s, [])),
+                "tables": schema_payload.get(s, []),
+            }
+            for s in requested_schemas
+        ],
+    }
+
+
+@app.get("/db/table-detail")
+async def db_table_detail(
+    schema: str,
+    table: str,
+    gap_minutes: int = Query(5, ge=1, le=1440),
+    symbol_limit: int = Query(25, ge=1, le=200),
+    symbol_query: Optional[str] = None,
+    from_time: Optional[str] = None,
+    to_time: Optional[str] = None,
+):
+    schema = _validate_identifier(schema, "schema")
+    table = _validate_identifier(table, "table")
+    q_table = f"{_quote_ident(schema)}.{_quote_ident(table)}"
+    gap_filter_sql = _gap_filter_sql_for_table(table)
+
+    pool = await DatabaseManager.get_pool()
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = $1
+                  AND table_name = $2
+            )
+            """,
+            schema,
+            table,
+        )
+        if not exists:
+            raise HTTPException(404, f"Table not found: {schema}.{table}")
+
+        columns_rows = await conn.fetch(
+            """
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = $1 AND table_name = $2
+            ORDER BY ordinal_position
+            """,
+            schema,
+            table,
+        )
+        columns = [
+            {
+                "name": r["column_name"],
+                "type": r["data_type"],
+                "nullable": r["is_nullable"] == "YES",
+            }
+            for r in columns_rows
+        ]
+        col_names = {c["name"] for c in columns}
+        has_time = "time" in col_names
+        has_symbol = "symbol" in col_names
+
+        parsed_from_time = _parse_datetime_input(from_time, "from_time") if from_time else None
+        parsed_to_time = _parse_datetime_input(to_time, "to_time", end_of_day=True) if to_time else None
+        normalized_symbol_query = (symbol_query or "").strip()
+
+        where_parts: List[str] = []
+        where_args: List[Any] = []
+
+        if normalized_symbol_query:
+            if not has_symbol:
+                raise HTTPException(400, "symbol_query filter is not supported for tables without a symbol column")
+            where_args.append(f"%{normalized_symbol_query}%")
+            where_parts.append(f"symbol ILIKE ${len(where_args)}")
+
+        if parsed_from_time is not None:
+            if not has_time:
+                raise HTTPException(400, "from_time filter is not supported for tables without a time column")
+            where_args.append(parsed_from_time)
+            where_parts.append(f"time >= ${len(where_args)}")
+
+        if parsed_to_time is not None:
+            if not has_time:
+                raise HTTPException(400, "to_time filter is not supported for tables without a time column")
+            where_args.append(parsed_to_time)
+            where_parts.append(f"time <= ${len(where_args)}")
+
+        if parsed_from_time is not None and parsed_to_time is not None and parsed_from_time > parsed_to_time:
+            raise HTTPException(400, "from_time must be less than or equal to to_time")
+
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+        row_count = await conn.fetchval(f"SELECT COUNT(*)::bigint FROM {q_table} {where_sql}", *where_args)
+
+        min_time = None
+        max_time = None
+        if has_time:
+            time_row = await conn.fetchrow(
+                f"SELECT MIN(time) AS min_time, MAX(time) AS max_time FROM {q_table} {where_sql}",
+                *where_args,
+            )
+            min_time = time_row["min_time"]
+            max_time = time_row["max_time"]
+
+        symbol_ranges = []
+        if has_time and has_symbol:
+            symbol_rows = await conn.fetch(
+                f"""
+                SELECT symbol,
+                       COUNT(*)::bigint AS records,
+                       MIN(time) AS min_time,
+                       MAX(time) AS max_time
+                FROM {q_table}
+                {where_sql}
+                GROUP BY symbol
+                ORDER BY records DESC
+                LIMIT ${len(where_args) + 1}
+                """,
+                *where_args,
+                symbol_limit,
+            )
+            symbol_ranges = [
+                {
+                    "symbol": r["symbol"],
+                    "records": int(r["records"] or 0),
+                    "min_time": r["min_time"],
+                    "max_time": r["max_time"],
+                }
+                for r in symbol_rows
+            ]
+
+            gap_rows = await conn.fetch(
+                f"""
+                WITH ordered AS (
+                    SELECT symbol, time,
+                           LAG(time) OVER (PARTITION BY symbol ORDER BY time) AS prev_time
+                    FROM {q_table}
+                                        {where_sql}
+                )
+                SELECT symbol,
+                       prev_time AS gap_start,
+                       time AS gap_end,
+                       EXTRACT(EPOCH FROM (time - prev_time))/60.0 AS missing_minutes
+                FROM ordered
+                WHERE prev_time IS NOT NULL
+                             {gap_filter_sql}
+                                    AND time - prev_time > ${len(where_args) + 1}::interval
+                ORDER BY missing_minutes DESC
+                LIMIT 100
+                """,
+                                *where_args,
+                timedelta(minutes=gap_minutes),
+            )
+            gap_samples = [
+                {
+                    "symbol": r["symbol"],
+                    "gap_start": r["gap_start"],
+                    "gap_end": r["gap_end"],
+                    "missing_minutes": float(r["missing_minutes"]),
+                }
+                for r in gap_rows
+            ]
+        else:
+            gap_samples = []
+
+    return {
+        "status": "success",
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "table": {
+            "schema": schema,
+            "name": table,
+            "row_count": int(row_count or 0),
+            "time_range": {
+                "min": min_time,
+                "max": max_time,
+            } if has_time else None,
+            "has_time": has_time,
+            "has_symbol": has_symbol,
+        },
+        "columns": columns,
+        "symbol_ranges": symbol_ranges,
+        "gap_analysis": {
+            "gap_minutes_threshold": gap_minutes,
+            "sample_gaps": gap_samples,
+        } if has_time and has_symbol else None,
+        "filters": {
+            "symbol_query": normalized_symbol_query or None,
+            "from_time": parsed_from_time,
+            "to_time": parsed_to_time,
+        },
+    }
 
 @app.get("/recorder/events")
 async def recorder_events(provider: str = "fyers"):

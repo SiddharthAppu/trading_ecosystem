@@ -3,12 +3,21 @@ import { useRef, useState, useEffect } from 'react';
 import { Play, Pause, RotateCcw } from 'lucide-react';
 import ChartComponent from './ChartComponent';
 
+type ReplayPoint = {
+    time: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    delta?: number;
+};
+
 export default function ReplayControl() {
     const [symbol, setSymbol] = useState('NSE:NIFTY24DEC25000CE');
     const [speed, setSpeed] = useState(1);
     const [isPlaying, setIsPlaying] = useState(false);
     const [status, setStatus] = useState('Ready');
-    const [dataPoints, setDataPoints] = useState<Record<string, unknown>[]>([]);
+    const [dataPoints, setDataPoints] = useState<ReplayPoint[]>([]);
     const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
 
     const wsRef = useRef<WebSocket | null>(null);
@@ -53,7 +62,7 @@ export default function ReplayControl() {
                 setIsPlaying(false);
             } else {
                 // Accumulate points for the chart
-                setDataPoints((prev: Record<string, unknown>[]) => [...prev, data]);
+                setDataPoints((prev: ReplayPoint[]) => [...prev, data as ReplayPoint]);
             }
         };
 

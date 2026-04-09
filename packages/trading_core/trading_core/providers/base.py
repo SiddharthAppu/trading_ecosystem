@@ -39,3 +39,8 @@ class BrokerAdapter(ABC):
     ) -> dict:
         """Generates a list of option chain symbols around the ATM strike."""
         raise NotImplementedError()
+
+    @abstractmethod
+    def get_option_expiries(self, underlying_symbol: str) -> list[str]:
+        """Returns available option expiries for the given underlying symbol."""
+        raise NotImplementedError()

@@ -8,11 +8,21 @@ import {
     ISeriesApi,
     CandlestickData,
     LineData,
+    UTCTimestamp,
     CandlestickSeries,
     LineSeries
 } from 'lightweight-charts';
 
-export default function ChartComponent({ data }: { data: any[] }) {
+type ReplayPoint = {
+    time: string;
+    open: number | string;
+    high: number | string;
+    low: number | string;
+    close: number | string;
+    delta?: number | string;
+};
+
+export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -95,19 +105,20 @@ export default function ChartComponent({ data }: { data: any[] }) {
         const sortedData = [...data].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
 
         sortedData.forEach(d => {
-            const unixTime = Math.floor(new Date(d.time as string).getTime() / 1000);
+            const unixTime = Math.floor(new Date(d.time).getTime() / 1000);
+            const chartTime = unixTime as UTCTimestamp;
 
             if (!isNaN(unixTime) && !seenTimes.has(unixTime)) {
                 seenTimes.add(unixTime);
                 formattedCandles.push({
-                    time: unixTime as any,
+                    time: chartTime,
                     open: Number(d.open),
                     high: Number(d.high),
                     low: Number(d.low),
                     close: Number(d.close),
                 });
                 formattedDelta.push({
-                    time: unixTime as any,
+                    time: chartTime,
                     value: Number(d.delta || 0),
                 });
             }

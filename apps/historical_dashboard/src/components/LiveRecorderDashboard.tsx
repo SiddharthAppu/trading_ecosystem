@@ -5,10 +5,24 @@ import { Play, Square, Plus, Trash2, Database, ShieldCheck, Info } from 'lucide-
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8080";
 
+type IndexTick = {
+  time: string;
+  price: number;
+  volume: number;
+  bid_price: number;
+  ask_price: number;
+};
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return 'Unknown error';
+}
+
 export default function LiveRecorderDashboard() {
     // Live index ticks state
-    const [indexTicks, setIndexTicks] = useState<any[]>([]);
+    const [indexTicks, setIndexTicks] = useState<IndexTick[]>([]);
     const [indexTicksLoading, setIndexTicksLoading] = useState(false);
+  const [backendError, setBackendError] = useState<string | null>(null);
 
     // Fetch recent index ticks every 5s
     useEffect(() => {
@@ -17,9 +31,13 @@ export default function LiveRecorderDashboard() {
         setIndexTicksLoading(true);
         try {
           const res = await fetch(`${API_BASE}/index-ticks/recent?limit=20`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
-          if (mounted && data.status === "success") setIndexTicks(data.ticks);
-        } catch (e) {
+          if (mounted && data.status === "success") {
+            setIndexTicks(data.ticks);
+            setBackendError(null);
+          }
+        } catch {
           if (mounted) setIndexTicks([]);
         } finally {
           if (mounted) setIndexTicksLoading(false);
@@ -66,11 +84,15 @@ export default function LiveRecorderDashboard() {
   const fetchStatus = async () => {
     try {
       const res = await fetch(`${API_BASE}/recorder/status`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setIsRunning(data.is_running);
       setSymbols(data.symbols);
-    } catch (err) {
-      console.error("Failed to fetch status");
+      setBackendError(null);
+    } catch {
+      setBackendError(`Data Collector API is unreachable at ${API_BASE}`);
+      setIsRunning(false);
+      setSymbols([]);
     }
   };
 
@@ -85,7 +107,7 @@ export default function LiveRecorderDashboard() {
       } else {
         alert(data.message || "Operation failed");
       }
-    } catch (err) {
+    } catch {
       alert("Failed to connect to backend");
     } finally {
       setLoading(false);
@@ -103,8 +125,8 @@ export default function LiveRecorderDashboard() {
       const data = await res.json();
       setSymbols(data.symbols);
       setNewSymbol("");
-    } catch (err: any) {
-      alert(err.message || "Failed to subscribe");
+    } catch (err: unknown) {
+      alert(getErrorMessage(err));
     }
   };
 
@@ -117,7 +139,7 @@ export default function LiveRecorderDashboard() {
       });
       const data = await res.json();
       setSymbols(data.symbols);
-    } catch (err) {
+    } catch {
       alert("Failed to unsubscribe");
     }
   };
@@ -145,8 +167,8 @@ export default function LiveRecorderDashboard() {
       });
       const subData = await subRes.json();
       setSymbols(subData.symbols);
-    } catch (err: any) {
-      alert(err.message || "Smart subscribe failed");
+    } catch (err: unknown) {
+      alert(getErrorMessage(err));
     } finally {
       setIsSmartLoading(false);
     }
@@ -187,6 +209,15 @@ export default function LiveRecorderDashboard() {
       </div>
 
       <div className="space-y-4">
+        {backendError && (
+          <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl">
+            <p className="text-xs text-red-300 font-medium">{backendError}</p>
+            <p className="text-[10px] text-red-200/80 mt-1">
+              Start Data Collector service (port 8080) or set NEXT_PUBLIC_API_BASE correctly.
+            </p>
+          </div>
+        )}
+
         {/* section: Live NIFTY50 Index Ticks */}
         <div className="p-4 bg-indigo-500/5 border border-indigo-500/10 rounded-xl space-y-3">
           <div className="flex items-center justify-between">

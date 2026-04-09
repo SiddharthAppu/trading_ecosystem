@@ -4,10 +4,11 @@ import { useState } from 'react';
 import DownloaderForm from '@/components/DownloaderForm';
 import LiveRecorderDashboard from '@/components/LiveRecorderDashboard';
 import ReplayControl from '@/components/ReplayControl';
-import { Activity, LayoutDashboard, MonitorPlay, Info } from 'lucide-react';
+import DBManagementPanel from '@/components/DBManagementPanel';
+import { Activity, LayoutDashboard, MonitorPlay, Info, ServerCog } from 'lucide-react';
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<'control' | 'replay'>('control');
+  const [activeTab, setActiveTab] = useState<'control' | 'replay' | 'db'>('control');
 
   return (
     <main className="min-h-screen bg-zinc-950 text-white selection:bg-indigo-500/30 font-sans transition-colors duration-500">
@@ -44,6 +45,13 @@ export default function Home() {
             >
               <MonitorPlay size={18} />
               Replay Studio
+            </button>
+            <button
+              onClick={() => setActiveTab('db')}
+              className={`flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-bold transition-all duration-300 ${activeTab === 'db' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30' : 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5'}`}
+            >
+              <ServerCog size={18} />
+              DB Management
             </button>
           </div>
         </header>
@@ -88,9 +96,13 @@ export default function Home() {
                 </div>
               </div>
             </div>
-          ) : (
+          ) : activeTab === 'replay' ? (
             <div className="w-full">
               <ReplayControl />
+            </div>
+          ) : (
+            <div className="w-full max-w-[1400px]">
+              <DBManagementPanel />
             </div>
           )}
         </div>

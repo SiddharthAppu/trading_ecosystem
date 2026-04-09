@@ -91,6 +91,31 @@ class MigrationManager:
     );
     SELECT create_hypertable('broker_upstox.options_ohlc', 'time', if_not_exists => TRUE);
 
+    -- Live Options Greeks Table (Hypertable)
+    CREATE TABLE IF NOT EXISTS broker_fyers.options_greeks_live (
+        time TIMESTAMPTZ NOT NULL,
+        symbol TEXT NOT NULL,
+        delta DOUBLE PRECISION,
+        theta DOUBLE PRECISION,
+        gamma DOUBLE PRECISION,
+        vega DOUBLE PRECISION,
+        iv DOUBLE PRECISION,
+        UNIQUE(time, symbol)
+    );
+    SELECT create_hypertable('broker_fyers.options_greeks_live', 'time', if_not_exists => TRUE);
+
+    CREATE TABLE IF NOT EXISTS broker_upstox.options_greeks_live (
+        time TIMESTAMPTZ NOT NULL,
+        symbol TEXT NOT NULL,
+        delta DOUBLE PRECISION,
+        theta DOUBLE PRECISION,
+        gamma DOUBLE PRECISION,
+        vega DOUBLE PRECISION,
+        iv DOUBLE PRECISION,
+        UNIQUE(time, symbol)
+    );
+    SELECT create_hypertable('broker_upstox.options_greeks_live', 'time', if_not_exists => TRUE);
+
 
     -- Options Greeks Table (Hypertable)
     CREATE TABLE IF NOT EXISTS analytics.options_greeks (
@@ -108,6 +133,19 @@ class MigrationManager:
         rho DOUBLE PRECISION
     );
     SELECT create_hypertable('analytics.options_greeks', 'time', if_not_exists => TRUE);
+
+    CREATE TABLE IF NOT EXISTS analytics.options_greeks_master (
+        provider TEXT NOT NULL,
+        time TIMESTAMPTZ NOT NULL,
+        symbol TEXT NOT NULL,
+        delta DOUBLE PRECISION,
+        theta DOUBLE PRECISION,
+        gamma DOUBLE PRECISION,
+        vega DOUBLE PRECISION,
+        iv DOUBLE PRECISION,
+        UNIQUE(provider, time, symbol)
+    );
+    SELECT create_hypertable('analytics.options_greeks_master', 'time', if_not_exists => TRUE);
     """
 
     @classmethod

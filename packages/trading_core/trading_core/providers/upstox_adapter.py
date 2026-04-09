@@ -211,3 +211,11 @@ class UpstoxAdapter(BrokerAdapter):
             "symbols": [c["instrument_key"] for c in final_contracts],
             "contracts": final_contracts
         }
+
+    def get_option_expiries(self, underlying_symbol: str) -> list[str]:
+        underlying_key = UPSTOX_UNDERLYING_KEYS.get(underlying_symbol, underlying_symbol)
+        response = self._request("GET", "/v2/option/contract", query={"instrument_key": underlying_key})
+        contracts = response.get("data", [])
+
+        expiries = sorted({str(contract.get("expiry")) for contract in contracts if contract.get("expiry")})
+        return expiries

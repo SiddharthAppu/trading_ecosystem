@@ -183,3 +183,68 @@ class FyersAdapter(BrokerAdapter):
             "symbols": symbols,
             "contracts": contracts,
         }
+
+    def _normalize_expiry(self, raw_expiry: str) -> str:
+        value = str(raw_expiry).strip().upper()
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+            return value
+
+        reverse_month_map = {v: k for k, v in MONTH_MAP.items()}
+        if re.match(r"^\d{2}[1-9OND]\d{2}$", value):
+            yy = int(value[:2])
+            month_code = value[2]
+            dd = value[3:]
+            month_name = reverse_month_map.get(month_code)
+            if not month_name:
+                return value
+            month_num = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"].index(month_name) + 1
+            return f"20{yy:02d}-{month_num:02d}-{int(dd):02d}"
+
+        return value
+
+    def get_option_expiries(self, underlying_symbol: str) -> list[str]:
+        client = self._get_client()
+        payload_candidates = [
+            {"symbol": underlying_symbol, "strikecount": 1},
+            {"symbol": underlying_symbol, "strikecount": 1, "timestamp": ""},
+        ]
+
+        response = None
+        for payload in payload_candidates:
+            try:
+                maybe_response = client.optionchain(payload)
+            except Exception:
+                continue
+            if isinstance(maybe_response, dict) and maybe_response.get("s") == "ok":
+                response = maybe_response
+                break
+
+        if not response:
+            raise ValueError("Fyers option chain request failed. Unable to resolve expiries.")
+
+        expiries = set()
+
+        def collect_from_item(item):
+            if not isinstance(item, dict):
+                return
+            for key in ("expiry", "expiryDate", "expiry_date", "date"):
+                value = item.get(key)
+                if value:
+                    expiries.add(self._normalize_expiry(str(value)))
+
+        data = response.get("data")
+        if isinstance(data, dict):
+            for value in data.values():
+                if isinstance(value, list):
+                    for item in value:
+                        collect_from_item(item)
+                else:
+                    collect_from_item(value)
+        elif isinstance(data, list):
+            for item in data:
+                collect_from_item(item)
+
+        if not expiries:
+            raise ValueError("No expiries found in Fyers option chain response.")
+
+        return sorted(expiries)

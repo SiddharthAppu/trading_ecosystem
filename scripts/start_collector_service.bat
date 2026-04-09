@@ -8,9 +8,13 @@ set "PYTHONPATH=%ROOT%"
 set "TRADING_CONFIG_DIR=../../config"
 set "TRADING_AUTH_DIR=../../config/auth"
 
-if exist ".venv\Scripts\activate.bat" (
-    call .venv\Scripts\activate.bat
+if not exist ".venv\Scripts\python.exe" (
+    echo ERROR: Missing service virtual environment at services\data_collector\.venv
+    popd
+    pause
+    exit /b 1
 )
-python main.py
+
+".venv\Scripts\python.exe" main.py
 popd
 pause

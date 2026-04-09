@@ -1,0 +1,21 @@
+# Task Plan: Upstox Historical Options Sync
+
+- `[/]` **Initialize**
+  - `[x]` Finalize implementation plan with iterative DB-lookup strategy.
+  - `[x]` Use this file as the progress tracker.
+- `[x]` **Trading Core Updates**
+  - `[x]` Implement `get_expired_expiries()` in Upstox Provider.
+  - `[x]` Implement `get_expired_option_contracts_batch()` in Upstox Provider to resolve `instrument_key` mapping.
+  - `[x]` Implement `download_historical_candles_batch()` with async rate limiting (50 req/sec maximum).
+- `[x]` **Data Collector Updates**
+  - `[x]` Create `services/data_collector/scripts/upstox_options_sync.py` orchestrator script.
+  - `[x]` Add DB logic to query `broker_upstox.ohlcv_1m` for 09:15 AM spot price for all valid dates.
+  - `[x]` Add logic to find ATM and calculate 43 target strikes for each active expiry.
+  - `[x]` Hook orchestrator to Upstox API methods.
+  - `[x]` Add DB logic to bulk `execute_values` upsert results to `broker_upstox.options_ohlc`.
+- `[x]` **Validation**
+  - `[x]` Execute `upstox_options_sync.py` for a short date range.
+  - `[x]` Verify DB `options_ohlc` contains exactly 43 symbols per active expiry for each expected minute.
+- `[x]` **Documentation**
+  - `[x]` Verify implementation against repo conventions and approved plan.
+  - `[x]` Generate `walkthrough.md`.

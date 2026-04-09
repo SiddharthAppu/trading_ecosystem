@@ -1,14 +1,13 @@
 import argparse
-import json
 import time
 import requests
 import webbrowser
 from datetime import datetime, timedelta
-import sys
 
 # Assume Data Collector API is already running via start_platform.bat
 BACKEND_URL = "http://localhost:8080"
 INDEX_SYMBOL = "NSE:NIFTY50-INDEX"
+UPSTOX_INDEX_SYMBOL = "NSE_INDEX|Nifty 50"
 REQUEST_TIMEOUT = 15
 
 def is_backend_running():
@@ -52,7 +51,7 @@ def get_next_expiry_default():
         days_ahead += 7
     return (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
-def get_live_chain(provider, expiry, strike_count=10, max_symbols=None):
+def get_live_chain(provider, expiry, strike_count=21, max_symbols=None):
     req = {
         "underlying_symbol": INDEX_SYMBOL,
         "expiry_date": expiry,
@@ -68,13 +67,34 @@ def get_live_chain(provider, expiry, strike_count=10, max_symbols=None):
         symbols = symbols[: max(0, int(max_symbols))]
     return symbols
 
-def start_recording(provider, symbols, include_index=True):
+
+def parse_expiry_list(expiry: str | None, expiries: str | None) -> list[str]:
+    items = []
+    if expiries:
+        items.extend([e.strip() for e in expiries.split(",") if e.strip()])
+    if expiry:
+        items.append(expiry.strip())
+
+    # Preserve order while removing duplicates.
+    deduped = []
+    seen = set()
+    for item in items:
+        if item and item not in seen:
+            deduped.append(item)
+            seen.add(item)
+    return deduped
+
+def start_recording(provider, symbols, include_index=True, mode="lite"):
     subscribe_symbols = list(symbols)
-    if include_index and INDEX_SYMBOL not in subscribe_symbols:
-        subscribe_symbols.append(INDEX_SYMBOL)
+    provider_index_symbol = UPSTOX_INDEX_SYMBOL if provider == "upstox" else INDEX_SYMBOL
+    if include_index and provider_index_symbol not in subscribe_symbols:
+        subscribe_symbols.append(provider_index_symbol)
 
     # 1. Start Server Instance Target
-    r = requests.post(f"{BACKEND_URL}/recorder/start?provider={provider}", timeout=REQUEST_TIMEOUT)
+    r = requests.post(
+        f"{BACKEND_URL}/recorder/start?provider={provider}&mode={mode}",
+        timeout=REQUEST_TIMEOUT,
+    )
     if r.status_code != 200:
         print(f"[ERROR] Starting recorder logic: {r.json().get('detail')}")
         return False
@@ -86,19 +106,25 @@ def start_recording(provider, symbols, include_index=True):
         print(f"[ERROR] Pushing symbols to stream: {r.json().get('detail')}")
         return False
     
-    option_count = len([s for s in subscribe_symbols if s != INDEX_SYMBOL])
-    print(f"[LIVE] Websocket started for {option_count} OPTS + Index ({INDEX_SYMBOL}) on {provider.upper()}.")
+    option_count = len([s for s in subscribe_symbols if s != provider_index_symbol])
+    print(f"[LIVE] Websocket started for {option_count} OPTS + Index ({provider_index_symbol}) on {provider.upper()}.")
     return True
 
 def stop_recording_for_provider(provider):
     try:
         requests.post(f"{BACKEND_URL}/recorder/stop?provider={provider}", timeout=REQUEST_TIMEOUT)
         print(f"[*] Stream cleanly stopped for {provider}.")
-    except Exception:
+    except requests.RequestException:
         pass
 
 def main():
     parser = argparse.ArgumentParser(description="Live Options Data Tick Orchestrator")
+    parser.add_argument("--provider", choices=["fyers", "upstox"], help="Provider to use.")
+    parser.add_argument("--expiry", help="Target active expiry in YYYY-MM-DD format.")
+    parser.add_argument("--expiries", help="Comma-separated active expiries in YYYY-MM-DD format.")
+    parser.add_argument("--strike-count", type=int, default=21, help="Strikes on each side of ATM.")
+    parser.add_argument("--mode", choices=["lite", "full"], help="Stream mode override.")
+    parser.add_argument("--non-interactive", action="store_true", help="Fail instead of prompting for missing inputs.")
     args = parser.parse_args()
 
     if not is_backend_running():
@@ -108,34 +134,61 @@ def main():
 
     print("\n=== 📡 TRADING CORE: LIVE WEBSOCKET ORCHESTRATOR ===")
     
-    # Provider mapping
-    provider = input("Select Provider (fyers/upstox) [Default fyers]: ").strip().lower() or "fyers"
+    provider = (args.provider or "").strip().lower()
+    if not provider:
+        if args.non_interactive:
+            print("[ERROR] --provider is required in --non-interactive mode.")
+            exit(2)
+        provider = input("Select Provider (fyers/upstox) [Default fyers]: ").strip().lower() or "fyers"
 
     if not login(provider):
         print("Login pipeline failed. Exiting automation.")
-        exit(2)
-
-    next_expiry = get_next_expiry_default()
-    expiry = input(f"Enter target active Expiry (MMMDD or YYYY-MM-DD) [Default {next_expiry}]: ").strip() or next_expiry
-
-    print(f"[*] Extracting Options Chain for {INDEX_SYMBOL} ({expiry})...")
-    symbols = get_live_chain(provider, expiry, strike_count=10)
-    
-    if not symbols:
-        print("Empty contract payload received. Exiting.")
         exit(3)
 
-    if not start_recording(provider, symbols, include_index=True):
-        exit(4)
+    stream_mode = args.mode or ("full" if provider == "upstox" else "lite")
+    if provider == "upstox" and stream_mode == "full":
+        print("[INFO] Upstox full mode requested. Recorder will attempt to capture depth and Greeks when present in live payloads.")
+
+    next_expiry = get_next_expiry_default()
+    expiry = (args.expiry or "").strip()
+    expiries = parse_expiry_list(expiry, args.expiries)
+    if not expiries:
+        if args.non_interactive:
+            print("[ERROR] --expiry or --expiries is required in --non-interactive mode.")
+            exit(4)
+        expiry = input(f"Enter target active Expiry (MMMDD or YYYY-MM-DD) [Default {next_expiry}]: ").strip() or next_expiry
+        expiries = [expiry]
+
+    all_symbols = []
+    for target_expiry in expiries:
+        print(f"[*] Extracting Options Chain for {INDEX_SYMBOL} ({target_expiry})...")
+        symbols = get_live_chain(provider, target_expiry, strike_count=args.strike_count)
+        if not symbols:
+            print(f"[WARN] Empty contract payload for expiry {target_expiry}.")
+            continue
+        all_symbols.extend(symbols)
+
+    symbols = list(dict.fromkeys(all_symbols))
+
+    if not symbols:
+        print("Empty contract payload received. Exiting.")
+        exit(5)
+
+    print(f"[*] Prepared {len(symbols)} unique option symbols across {len(expiries)} expiry(ies).")
+
+    if not start_recording(provider, symbols, include_index=True, mode=stream_mode):
+        exit(6)
         
     # Standard Market Timings logic block
     now = datetime.now()
-    market_start = now.replace(hour=9, minute=0, second=0, microsecond=0)
     market_end = now.replace(hour=15, minute=45, second=0, microsecond=0)
     
     if now > market_end:
         print("\n[WARN] Market is officially closed for today.")
-        proceed = input("Force start the diagnostic recording anyway? (y/n): ").strip().lower() == 'y'
+        if args.non_interactive:
+            proceed = False
+        else:
+            proceed = input("Force start the diagnostic recording anyway? (y/n): ").strip().lower() == 'y'
         if not proceed:
             stop_recording_for_provider(provider)
             exit(0)

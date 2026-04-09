@@ -16,6 +16,20 @@ import { ShieldCheck, Calendar, Target, Settings, Info } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8080";
 
+function getErrorMessage(error: unknown): string {
+    if (axios.isAxiosError(error)) {
+        const detail = error.response?.data?.detail;
+        if (typeof detail === 'string' && detail.trim()) {
+            return detail;
+        }
+        return error.message;
+    }
+    if (error instanceof Error) {
+        return error.message;
+    }
+    return 'Unknown error';
+}
+
 export default function DownloaderForm() {
     // Move startDate/endDate above indexStartDate/indexEndDate to avoid ReferenceError
     const [startDate, setStartDate] = useState('2026-03-01');
@@ -50,8 +64,8 @@ export default function DownloaderForm() {
                     provider: 'fyers'
                 });
                 setIndexStatus(response.data.message || "Success");
-            } catch (error: any) {
-                setIndexStatus("Error: " + (error.response?.data?.detail || error.message));
+            } catch (error: unknown) {
+                setIndexStatus("Error: " + getErrorMessage(error));
             } finally {
                 setIndexLoading(false);
             }
@@ -76,7 +90,10 @@ export default function DownloaderForm() {
     useEffect(() => {
         axios.get(`${API_BASE}/auth/status`)
             .then(res => setIsAuthenticated(res.data.authenticated))
-            .catch(console.error);
+            .catch(() => {
+                setIsAuthenticated(false);
+                setStatus(`Data Collector API is unreachable at ${API_BASE}.`);
+            });
     }, []);
 
     const handleLogin = async () => {
@@ -106,11 +123,12 @@ export default function DownloaderForm() {
             });
             setStatus(response.data.message);
             return true;
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error(error);
-            const errorMsg = error.response?.data?.detail || error.message;
+            const errorMsg = getErrorMessage(error);
             setStatus(`Error: ${errorMsg}`);
-            if (errorMsg.includes("authenticate") || errorMsg.includes("-16") || error.response?.status === 401) {
+            const unauthorized = axios.isAxiosError(error) && error.response?.status === 401;
+            if (errorMsg.includes("authenticate") || errorMsg.includes("-16") || unauthorized) {
                 setIsAuthenticated(false);
             }
             return false;
@@ -170,9 +188,9 @@ export default function DownloaderForm() {
                 dateRange: `${startDate} to ${endDate}`
             });
             setStatus(`Successfully downloaded all ${total} symbols in the chain!`);
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error(error);
-            setStatus("Bulk download failed: " + (error.response?.data?.detail || error.message));
+            setStatus("Bulk download failed: " + getErrorMessage(error));
         } finally {
             setIsSmartLoading(false);
         }

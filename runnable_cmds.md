@@ -75,6 +75,60 @@ Discovers and downloads an entire option chain for a specific expiry.
 .\services\data_collector\.venv\Scripts\python.exe scripts\quick_option_chain.py --underlying "NSE:NIFTY50-INDEX" --expiry "26MAR" --start 2026-03-24 --end 2026-03-24
 ```
 
+### 📅 Expiry Discovery (Single/Both Providers)
+Fetch available expiries from the unified Data Collector endpoint.
+```powershell
+# Both providers
+.\services\data_collector\.venv\Scripts\python.exe scripts\list_expiries.py
+
+# One provider
+.\services\data_collector\.venv\Scripts\python.exe scripts\list_expiries.py --provider upstox
+.\services\data_collector\.venv\Scripts\python.exe scripts\list_expiries.py --provider fyers
+```
+
+### 📡 Live Recorder (Single Worker)
+Run one provider + one expiry recorder in non-interactive mode.
+```powershell
+.\services\data_collector\.venv\Scripts\python.exe scripts\quick_live_recorder.py --provider upstox --expiry 2026-04-14 --strike-count 21 --mode full --non-interactive
+.\services\data_collector\.venv\Scripts\python.exe scripts\quick_live_recorder.py --provider fyers --expiry 2026-04-14 --strike-count 21 --mode lite --non-interactive
+```
+
+### 🧠 Master Recorder (2 Workers)
+Launch next 4 Tuesday expiries across both providers (1 worker per provider, each handling all expiries).
+```powershell
+.\services\data_collector\.venv\Scripts\python.exe scripts\master_recorder.py --strike-count 21 --heartbeat-seconds 20
+```
+
+### ✅ End-Of-Day Live Capture Verification
+Run a pass/fail health check after market close for the day's live tick and Greeks capture.
+```powershell
+.\services\data_collector\.venv\Scripts\python.exe scripts\verify_eod_live_capture.py
+
+# double-clickable batch wrapper
+.\scripts\run_eod_live_capture_check.bat
+
+# explicit date or custom thresholds
+.\services\data_collector\.venv\Scripts\python.exe scripts\verify_eod_live_capture.py --date 2026-04-09 --min-fyers-symbols 150 --max-upstox-symbol-drift 15
+```
+
+The script also writes a dated log file under `logs\eod_live_capture\` on every run.
+
+### 🗂️ DB Greeks + Compression Migration
+Apply schema update script for Greeks columns and Timescale compression settings.
+```powershell
+psql -h localhost -U trading -d trading_db -f scripts\add_greeks_and_compression.sql
+```
+
+### 🌙 End-Of-Day Greeks Merge (Provider -> Master)
+Merge `broker_upstox.options_greeks_live` and `broker_fyers.options_greeks_live` into `analytics.options_greeks_master`.
+```powershell
+# default: previous IST day
+.\services\data_collector\.venv\Scripts\python.exe scripts\merge_provider_greeks_to_master.py
+
+# explicit day
+.\services\data_collector\.venv\Scripts\python.exe scripts\merge_provider_greeks_to_master.py --date 2026-04-08
+```
+
 ### 🗄️ Database Management
 TimescaleDB must be explicitly managed to prevent freezes and ensure continuity. The `db_data/` and `db_backups/` folders are heavily git-ignored to prevent pushing massive datasets to cloud hosting.
 

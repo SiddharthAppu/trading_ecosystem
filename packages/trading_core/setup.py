@@ -8,6 +8,7 @@ setup(
         "pandas",
         "numpy",
         "scipy",
+        "aiohttp",
         "python-dotenv",
         "fyers-apiv3",
         "upstox-python-sdk",
