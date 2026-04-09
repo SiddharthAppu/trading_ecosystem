@@ -524,5 +524,38 @@ async def db_table_detail(
 async def recorder_events(provider: str = "fyers"):
     return StreamingResponse(recorder_manager.event_generator(provider), media_type="text/event-stream")
 
+
+VALID_DATA_TYPES = {
+    "market_ticks": "market_ticks",
+    "ohlcv_1m": "ohlcv_1m",
+    "options_ohlc": "options_ohlc",
+}
+
+@app.get("/available-symbols")
+async def available_symbols(
+    provider: str = Query("fyers", description="Provider: fyers or upstox"),
+    data_type: str = Query("options_ohlc", description="Table: market_ticks, ohlcv_1m, options_ohlc"),
+):
+    """Return the distinct symbols available in the selected provider/table combination."""
+    p = provider.lower()
+    if p not in ("fyers", "upstox"):
+        raise HTTPException(400, f"Invalid provider: {provider!r}. Must be 'fyers' or 'upstox'.")
+    if data_type not in VALID_DATA_TYPES:
+        raise HTTPException(400, f"Invalid data_type: {data_type!r}. Must be one of {list(VALID_DATA_TYPES)}.")
+
+    schema = "broker_upstox" if p == "upstox" else "broker_fyers"
+    table = VALID_DATA_TYPES[data_type]
+    q_table = f"{_quote_ident(schema)}.{_quote_ident(table)}"
+
+    pool = await DatabaseManager.get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT DISTINCT symbol FROM {q_table} ORDER BY symbol ASC"
+        )
+
+    symbols = [r["symbol"] for r in rows]
+    return {"status": "success", "provider": p, "data_type": data_type, "symbols": symbols}
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)

@@ -10,6 +10,7 @@ This document tracks the milestones achieved during the consolidation and develo
 | **2** | **Historical Platform UI** | ✅ Completed | 2026-04-05 |
 | **3** | **Data Collector** | ✅ Completed | 2026-04-05 |
 
+
 ## ✅ Completed Tasks
 - [x] **Project Unification**: Consolidated `HistoricalDownload`, `OptionsStrategyTester`, and `StrategyForge` into `trading_ecosystem`.
 - [x] **Monorepo Architecture**: Established the `apps/`, `packages/`, `services/` structure.
@@ -21,6 +22,8 @@ This document tracks the milestones achieved during the consolidation and develo
 - [x] **Live Recorder Upgrade (CLI + Orchestration)**: `quick_live_recorder.py` now supports `--provider`, `--expiry`, `--strike-count`, and non-interactive mode.
 - [x] **Master Recorder Launcher**: Added `scripts/master_recorder.py` to start 8 recorder workers (4 expiries x 2 providers).
 - [x] **Live Greeks Capture + EOD Merge**: Recorder now persists provider Greeks into `broker_<provider>.options_greeks_live`, with merge utility `scripts/merge_provider_greeks_to_master.py` for `analytics.options_greeks_master`.
+- [x] **End-Of-Day Health Check**: Added `scripts/verify_eod_live_capture.py` and batch wrapper for daily EOD tick/Greeks capture verification, with log output to `logs/eod_live_capture/`.
+- [x] **Database Backup Automation**: Added `scripts/db_backup.py` for safe, rolling Docker-based TimescaleDB backups with retention and no downtime.
 
 ## 🛠 Currently In Progress
 - **Event Bus Integration**: Migrating all services to use the asynchronous event bus in `trading_core.events`.
@@ -34,4 +37,4 @@ This document tracks the milestones achieved during the consolidation and develo
 4.  **Q4 2026**: Alpha release of Strategy Builder (Drag-and-Drop).
 
 ---
-*Last updated: 2026-04-08*
+*Last updated: 2026-04-10*

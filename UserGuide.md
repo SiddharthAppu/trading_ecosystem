@@ -51,7 +51,7 @@ To add a new strategy:
 - **Database Error**: Ensure PostgreSQL/TimescaleDB is running and accessible from your network.
 - **API Authentication**: Check `config/auth/` for valid Fyers/Upstox access tokens.
 
-## 📡 Live Recorder Workflows
+## 📡 Live Recorder & EOD Workflows
 
 ### Single Expiry Worker
 Use the upgraded `quick_live_recorder.py` in non-interactive mode:
@@ -60,18 +60,46 @@ Use the upgraded `quick_live_recorder.py` in non-interactive mode:
 ```
 
 ### Multi-Expiry Master Launcher
-Use `master_recorder.py` to launch the next 4 Tuesday expiries for both providers (8 workers):
+Launch all next 4 Tuesday expiries for both providers (8 workers):
 ```powershell
 .\services\data_collector\.venv\Scripts\python.exe scripts\master_recorder.py
+```
+
+### End-Of-Day Health Check
+After market close, verify that all live ticks and Greeks were captured for the day:
+```powershell
+.\services\data_collector\.venv\Scripts\python.exe scripts\verify_eod_live_capture.py
+# or double-clickable batch wrapper
+.\scripts\run_eod_live_capture_check.bat
+# with custom date/thresholds
+.\services\data_collector\.venv\Scripts\python.exe scripts\verify_eod_live_capture.py --date 2026-04-09 --min-fyers-symbols 150 --max-upstox-symbol-drift 15
+```
+Results and logs are written to `logs/eod_live_capture/`.
+
+### Nightly Greeks Merge
+Merge provider Greeks into the master table (run after EOD check):
+```powershell
+.\services\data_collector\.venv\Scripts\python.exe scripts\merge_provider_greeks_to_master.py
+# or for a specific date
+.\services\data_collector\.venv\Scripts\python.exe scripts\merge_provider_greeks_to_master.py --date 2026-04-08
+```
+
+### Database Backup & Restore
+Create a rolling backup of the TimescaleDB database (safe to run live, no downtime):
+```powershell
+.\services\data_collector\.venv\Scripts\python.exe scripts\db_backup.py --max 5
+```
+Backups are stored in `db_backups/` and old backups are purged automatically.
+
+To restore, use the generated `.sql` file with `psql` or Docker:
+```powershell
+# Example restore (replace with actual backup file)
+psql -h localhost -U trading -d trading_db -f db_backups/trading_db_backup_20260407_090632.sql
 ```
 
 ### Important Note on Upstox Full Mode
 - Upstox full websocket mode is wired through the recorder pipeline.
 - Live Greeks are persisted into provider tables (`broker_upstox.options_greeks_live`, `broker_fyers.options_greeks_live`) when present in payloads.
-- Run nightly merge into master table:
-```powershell
-.\services\data_collector\.venv\Scripts\python.exe scripts\merge_provider_greeks_to_master.py
-```
 - Provider payload fields may differ across symbols/exchanges; keep extraction mappings under periodic review.
 
 ---

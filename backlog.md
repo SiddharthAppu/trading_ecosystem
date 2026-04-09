@@ -2,6 +2,7 @@
 
 This document tracks upcoming features, improvements, and bugs to address in the unified trading platform.
 
+
 ## 🎯 High Priority
 - [ ] **Greeks Normalization Pipeline (Phase 2)**: Add strict field-level reconciliation, null-rate monitoring, and replay-grade validation over provider payload drift.
 - [ ] **Provider Payload Parity Hardening**: Continue validating symbol-level payload differences and fallback extraction logic for both providers.
@@ -9,6 +10,8 @@ This document tracks upcoming features, improvements, and bugs to address in the
 - [ ] **Unified Authentication Manager**: Centralize Fyers/Upstox token handling into a single package.
 - [ ] **Cross-App Navigation**: Ensure Historical UI and Forge UI share a consistent sidebar or header to switch between them.
 - [ ] **End-to-End Testing**: Create a suite of tests that verify the full flow (Downloader -> Replay -> Execution).
+- [ ] **EOD Health Check Automation**: Integrate EOD health check into CI or nightly cron, with alerting for failures and summary dashboard.
+- [ ] **Backup Monitoring & Restore Testing**: Add automated checks for backup completion, retention, and periodic restore validation to ensure DB recoverability.
 
 ## 🛠️ Infrastructure Improvements
 - [ ] **Provider Field Parity Matrix**: Publish and enforce a mapping contract for Fyers vs Upstox websocket fields (ltp, depth, volume, greeks).

@@ -15,18 +15,38 @@ import {
 
 type ReplayPoint = {
     time: string;
-    open: number | string;
-    high: number | string;
-    low: number | string;
-    close: number | string;
+    symbol?: string;
+    open?: number | string;
+    high?: number | string;
+    low?: number | string;
+    close?: number | string;
+    price?: number | string;
+    volume?: number | string;
+    bid?: number | string;
+    ask?: number | string;
     delta?: number | string;
+    implied_volatility?: number | string;
 };
 
 export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+    const priceSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
     const deltaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+
+    // Determine data type from first data point
+    const getDataType = (dataPoints: ReplayPoint[]) => {
+        if (!dataPoints || dataPoints.length === 0) return 'unknown';
+        const first = dataPoints[0];
+        if (first.open !== undefined && first.high !== undefined && first.low !== undefined && first.close !== undefined) {
+            // Has OHLC - could be ohlcv_1m or options_ohlc
+            return first.delta !== undefined ? 'options_ohlc' : 'ohlcv_1m';
+        } else if (first.price !== undefined) {
+            return 'market_ticks';
+        }
+        return 'unknown';
+    };
 
     // 1. Initialize the Chart
     useEffect(() => {
@@ -50,7 +70,7 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
             },
         });
 
-        // Use v5 unified Series API
+        // Add candlestick series for OHLC data
         const candlestickSeries = chart.addSeries(CandlestickSeries, {
             upColor: '#26a69a',
             downColor: '#ef5350',
@@ -59,6 +79,14 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
             wickDownColor: '#ef5350',
         });
 
+        // Add price line series for market_ticks or general price tracking
+        const priceSeries = chart.addSeries(LineSeries, {
+            color: '#f59e0b',
+            lineWidth: 2,
+            priceScaleId: 'price-axis',
+        });
+
+        // Add delta/IV line series
         const deltaSeries = chart.addSeries(LineSeries, {
             color: '#6366f1',
             lineWidth: 2,
@@ -74,6 +102,7 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
 
         chartRef.current = chart;
         candlestickSeriesRef.current = candlestickSeries;
+        priceSeriesRef.current = priceSeries;
         deltaSeriesRef.current = deltaSeries;
 
         const handleResize = () => {
@@ -95,10 +124,12 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
 
     // 2. Update Data when it changes
     useEffect(() => {
-        if (!candlestickSeriesRef.current || !deltaSeriesRef.current || !data || data.length === 0) return;
+        if (!candlestickSeriesRef.current || !priceSeriesRef.current || !deltaSeriesRef.current || !data || data.length === 0) return;
 
+        const dataType = getDataType(data);
         const seenTimes = new Set();
         const formattedCandles: CandlestickData[] = [];
+        const formattedPrices: LineData[] = [];
         const formattedDelta: LineData[] = [];
 
         // Sort data by time
@@ -110,23 +141,49 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
 
             if (!isNaN(unixTime) && !seenTimes.has(unixTime)) {
                 seenTimes.add(unixTime);
-                formattedCandles.push({
-                    time: chartTime,
-                    open: Number(d.open),
-                    high: Number(d.high),
-                    low: Number(d.low),
-                    close: Number(d.close),
-                });
-                formattedDelta.push({
-                    time: chartTime,
-                    value: Number(d.delta || 0),
-                });
+
+                // Handle different data types
+                if (dataType === 'market_ticks') {
+                    // For market ticks, show price as a line chart
+                    if (d.price !== undefined) {
+                        formattedPrices.push({
+                            time: chartTime,
+                            value: Number(d.price),
+                        });
+                    }
+                    // Optionally show bid/ask as additional series or info
+                } else if (dataType === 'ohlcv_1m' || dataType === 'options_ohlc') {
+                    // For OHLC data, show candlestick
+                    if (d.open !== undefined && d.high !== undefined && d.low !== undefined && d.close !== undefined) {
+                        formattedCandles.push({
+                            time: chartTime,
+                            open: Number(d.open),
+                            high: Number(d.high),
+                            low: Number(d.low),
+                            close: Number(d.close),
+                        });
+                    }
+                    // Show delta or IV in secondary axis
+                    const deltaValue = d.delta || d.implied_volatility;
+                    if (deltaValue !== undefined) {
+                        formattedDelta.push({
+                            time: chartTime,
+                            value: Number(deltaValue),
+                        });
+                    }
+                }
             }
         });
 
-        if (formattedCandles.length > 0) {
+        // Update chart based on data type
+        if (dataType === 'market_ticks' && formattedPrices.length > 0) {
+            priceSeriesRef.current.setData(formattedPrices);
+            chartRef.current?.timeScale().fitContent();
+        } else if ((dataType === 'ohlcv_1m' || dataType === 'options_ohlc') && formattedCandles.length > 0) {
             candlestickSeriesRef.current.setData(formattedCandles);
-            deltaSeriesRef.current.setData(formattedDelta);
+            if (formattedDelta.length > 0) {
+                deltaSeriesRef.current.setData(formattedDelta);
+            }
             chartRef.current?.timeScale().fitContent();
         }
 
