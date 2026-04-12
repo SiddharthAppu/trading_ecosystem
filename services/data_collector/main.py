@@ -528,13 +528,14 @@ async def recorder_events(provider: str = "fyers"):
 VALID_DATA_TYPES = {
     "market_ticks": "market_ticks",
     "ohlcv_1m": "ohlcv_1m",
+    "ohlcv_1min_from_ticks": "ohlcv_1min_from_ticks",
     "options_ohlc": "options_ohlc",
 }
 
 @app.get("/available-symbols")
 async def available_symbols(
     provider: str = Query("fyers", description="Provider: fyers or upstox"),
-    data_type: str = Query("options_ohlc", description="Table: market_ticks, ohlcv_1m, options_ohlc"),
+    data_type: str = Query("options_ohlc", description="Table: market_ticks, ohlcv_1m, ohlcv_1min_from_ticks, options_ohlc"),
 ):
     """Return the distinct symbols available in the selected provider/table combination."""
     p = provider.lower()

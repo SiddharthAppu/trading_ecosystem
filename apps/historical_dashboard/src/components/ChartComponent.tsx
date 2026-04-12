@@ -26,6 +26,12 @@ type ReplayPoint = {
     ask?: number | string;
     delta?: number | string;
     implied_volatility?: number | string;
+    ema_20?: number | string;
+    sma_20?: number | string;
+    rsi_14?: number | string;
+    macd_line?: number | string;
+    macd_signal?: number | string;
+    macd_histogram?: number | string;
 };
 
 export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
@@ -34,6 +40,11 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
     const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
     const priceSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
     const deltaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+    const emaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+    const smaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+    const rsiSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+    const macdSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+    const macdSignalSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
 
     // Determine data type from first data point
     const getDataType = (dataPoints: ReplayPoint[]) => {
@@ -93,6 +104,36 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
             priceScaleId: 'delta-axis',
         });
 
+        const emaSeries = chart.addSeries(LineSeries, {
+            color: '#38bdf8',
+            lineWidth: 2,
+            priceScaleId: 'price-axis',
+        });
+
+        const smaSeries = chart.addSeries(LineSeries, {
+            color: '#f97316',
+            lineWidth: 2,
+            priceScaleId: 'price-axis',
+        });
+
+        const rsiSeries = chart.addSeries(LineSeries, {
+            color: '#22d3ee',
+            lineWidth: 2,
+            priceScaleId: 'delta-axis',
+        });
+
+        const macdSeries = chart.addSeries(LineSeries, {
+            color: '#a78bfa',
+            lineWidth: 2,
+            priceScaleId: 'delta-axis',
+        });
+
+        const macdSignalSeries = chart.addSeries(LineSeries, {
+            color: '#facc15',
+            lineWidth: 2,
+            priceScaleId: 'delta-axis',
+        });
+
         chart.priceScale('delta-axis').applyOptions({
             scaleMargins: {
                 top: 0.1,
@@ -104,6 +145,11 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
         candlestickSeriesRef.current = candlestickSeries;
         priceSeriesRef.current = priceSeries;
         deltaSeriesRef.current = deltaSeries;
+        emaSeriesRef.current = emaSeries;
+        smaSeriesRef.current = smaSeries;
+        rsiSeriesRef.current = rsiSeries;
+        macdSeriesRef.current = macdSeries;
+        macdSignalSeriesRef.current = macdSignalSeries;
 
         const handleResize = () => {
             if (chartContainerRef.current && chartRef.current) {
@@ -124,13 +170,18 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
 
     // 2. Update Data when it changes
     useEffect(() => {
-        if (!candlestickSeriesRef.current || !priceSeriesRef.current || !deltaSeriesRef.current || !data || data.length === 0) return;
+        if (!candlestickSeriesRef.current || !priceSeriesRef.current || !deltaSeriesRef.current || !emaSeriesRef.current || !smaSeriesRef.current || !rsiSeriesRef.current || !macdSeriesRef.current || !macdSignalSeriesRef.current || !data || data.length === 0) return;
 
         const dataType = getDataType(data);
         const seenTimes = new Set();
         const formattedCandles: CandlestickData[] = [];
         const formattedPrices: LineData[] = [];
         const formattedDelta: LineData[] = [];
+        const formattedEma: LineData[] = [];
+        const formattedSma: LineData[] = [];
+        const formattedRsi: LineData[] = [];
+        const formattedMacd: LineData[] = [];
+        const formattedMacdSignal: LineData[] = [];
 
         // Sort data by time
         const sortedData = [...data].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
@@ -171,6 +222,41 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
                             value: Number(deltaValue),
                         });
                     }
+
+                    if (d.ema_20 !== undefined && d.ema_20 !== null) {
+                        formattedEma.push({
+                            time: chartTime,
+                            value: Number(d.ema_20),
+                        });
+                    }
+
+                    if (d.sma_20 !== undefined && d.sma_20 !== null) {
+                        formattedSma.push({
+                            time: chartTime,
+                            value: Number(d.sma_20),
+                        });
+                    }
+
+                    if (d.rsi_14 !== undefined && d.rsi_14 !== null) {
+                        formattedRsi.push({
+                            time: chartTime,
+                            value: Number(d.rsi_14),
+                        });
+                    }
+
+                    if (d.macd_line !== undefined && d.macd_line !== null) {
+                        formattedMacd.push({
+                            time: chartTime,
+                            value: Number(d.macd_line),
+                        });
+                    }
+
+                    if (d.macd_signal !== undefined && d.macd_signal !== null) {
+                        formattedMacdSignal.push({
+                            time: chartTime,
+                            value: Number(d.macd_signal),
+                        });
+                    }
                 }
             }
         });
@@ -178,11 +264,46 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
         // Update chart based on data type
         if (dataType === 'market_ticks' && formattedPrices.length > 0) {
             priceSeriesRef.current.setData(formattedPrices);
+            candlestickSeriesRef.current.setData([]);
+            deltaSeriesRef.current.setData([]);
+            emaSeriesRef.current.setData([]);
+            smaSeriesRef.current.setData([]);
+            rsiSeriesRef.current.setData([]);
+            macdSeriesRef.current.setData([]);
+            macdSignalSeriesRef.current.setData([]);
             chartRef.current?.timeScale().fitContent();
         } else if ((dataType === 'ohlcv_1m' || dataType === 'options_ohlc') && formattedCandles.length > 0) {
             candlestickSeriesRef.current.setData(formattedCandles);
+            priceSeriesRef.current.setData([]);
             if (formattedDelta.length > 0) {
                 deltaSeriesRef.current.setData(formattedDelta);
+            } else {
+                deltaSeriesRef.current.setData([]);
+            }
+            if (formattedEma.length > 0) {
+                emaSeriesRef.current.setData(formattedEma);
+            } else {
+                emaSeriesRef.current.setData([]);
+            }
+            if (formattedSma.length > 0) {
+                smaSeriesRef.current.setData(formattedSma);
+            } else {
+                smaSeriesRef.current.setData([]);
+            }
+            if (formattedRsi.length > 0) {
+                rsiSeriesRef.current.setData(formattedRsi);
+            } else {
+                rsiSeriesRef.current.setData([]);
+            }
+            if (formattedMacd.length > 0) {
+                macdSeriesRef.current.setData(formattedMacd);
+            } else {
+                macdSeriesRef.current.setData([]);
+            }
+            if (formattedMacdSignal.length > 0) {
+                macdSignalSeriesRef.current.setData(formattedMacdSignal);
+            } else {
+                macdSignalSeriesRef.current.setData([]);
             }
             chartRef.current?.timeScale().fitContent();
         }

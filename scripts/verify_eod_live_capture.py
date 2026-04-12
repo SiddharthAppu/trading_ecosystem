@@ -27,6 +27,14 @@ class TableDayStats:
     last_time: datetime | None
 
 
+@dataclass
+class TickGapAnomaly:
+    symbol: str
+    gap_start: datetime
+    gap_end: datetime
+    gap_seconds: int
+
+
 class TeeStream:
     def __init__(self, *streams) -> None:
         self.streams = streams
@@ -78,6 +86,24 @@ def parse_args() -> argparse.Namespace:
         "--log-dir",
         default=str(DEFAULT_LOG_DIR),
         help="Directory where dated verification logs will be written.",
+    )
+    parser.add_argument(
+        "--max-tick-gap-seconds",
+        type=int,
+        default=60,
+        help="Inter-tick silence (seconds) within market hours that counts as an anomaly.",
+    )
+    parser.add_argument(
+        "--max-tick-gap-anomalies",
+        type=int,
+        default=20,
+        help="Maximum number of such gap anomalies allowed before the check fails.",
+    )
+    parser.add_argument(
+        "--tick-gap-top-n",
+        type=int,
+        default=5,
+        help="How many worst-offender gaps to print when anomalies are found.",
     )
     return parser.parse_args()
 
@@ -156,6 +182,77 @@ async def fetch_gap_events(conn, schema_name: str, table_name: str, gap_minutes:
     return int(value or 0)
 
 
+async def fetch_tick_gap_anomalies(
+    conn,
+    schema_name: str,
+    target_date: date,
+    threshold_seconds: int,
+    top_n: int,
+) -> tuple[int, list[TickGapAnomaly]]:
+    """Return (total_anomaly_count, top_n_worst_offenders) for market_ticks on target_date.
+
+    An anomaly is any consecutive pair of ticks for the same symbol where the silence
+    between them exceeds `threshold_seconds` during NSE market hours (09:15–15:30 IST).
+    """
+    query = f"""
+        WITH ordered AS (
+            SELECT
+                symbol,
+                time,
+                LAG(time) OVER (PARTITION BY symbol ORDER BY time) AS prev_time
+            FROM {schema_name}.market_ticks
+            WHERE (time AT TIME ZONE 'Asia/Kolkata')::date = $1
+        ),
+        gaps AS (
+            SELECT
+                symbol,
+                prev_time AS gap_start,
+                time       AS gap_end,
+                EXTRACT(EPOCH FROM (time - prev_time))::int AS gap_seconds
+            FROM ordered
+            WHERE prev_time IS NOT NULL
+              AND (time     AT TIME ZONE 'Asia/Kolkata')::time BETWEEN TIME '09:15' AND TIME '15:30'
+              AND (prev_time AT TIME ZONE 'Asia/Kolkata')::time BETWEEN TIME '09:15' AND TIME '15:30'
+              AND EXTRACT(EPOCH FROM (time - prev_time)) > $2
+        ),
+        ranked AS (
+            SELECT
+                *,
+                ROW_NUMBER() OVER (ORDER BY gap_seconds DESC) AS rn,
+                COUNT(*)     OVER ()                          AS total_count
+            FROM gaps
+        )
+        SELECT total_count::int, symbol, gap_start, gap_end, gap_seconds
+        FROM ranked
+        WHERE rn <= $3
+        ORDER BY gap_seconds DESC
+    """
+    rows = await conn.fetch(query, target_date, float(threshold_seconds), top_n)
+    if not rows:
+        return 0, []
+    total_count = int(rows[0]["total_count"])
+    anomalies = [
+        TickGapAnomaly(
+            symbol=r["symbol"],
+            gap_start=r["gap_start"],
+            gap_end=r["gap_end"],
+            gap_seconds=int(r["gap_seconds"]),
+        )
+        for r in rows
+    ]
+    return total_count, anomalies
+
+
+def print_tick_gap_anomalies(provider: str, total: int, anomalies: list[TickGapAnomaly]) -> None:
+    if total == 0:
+        return
+    print(f"  [{provider}] {total} gap anomaly(-ies) found — top offenders:")
+    for a in anomalies:
+        start_ist = a.gap_start.astimezone(IST).strftime("%H:%M:%S")
+        end_ist = a.gap_end.astimezone(IST).strftime("%H:%M:%S")
+        print(f"    {a.symbol}: {start_ist} → {end_ist}  ({a.gap_seconds}s)")
+
+
 def print_stat_block(stats: TableDayStats) -> None:
     print(
         f"{stats.table_name}: rows={stats.daily_rows}, symbols={stats.daily_symbols}, "
@@ -179,6 +276,12 @@ async def main_async(args: argparse.Namespace, target_date: date) -> int:
             fyers_ticks = await fetch_day_stats(conn, "broker_fyers", "market_ticks", target_date)
             fyers_ohlcv_gap_events = await fetch_gap_events(conn, "broker_fyers", "ohlcv_1m")
             upstox_ohlcv_gap_events = await fetch_gap_events(conn, "broker_upstox", "ohlcv_1m")
+            upstox_gap_total, upstox_gap_top = await fetch_tick_gap_anomalies(
+                conn, "broker_upstox", target_date, args.max_tick_gap_seconds, args.tick_gap_top_n
+            )
+            fyers_gap_total, fyers_gap_top = await fetch_tick_gap_anomalies(
+                conn, "broker_fyers", target_date, args.max_tick_gap_seconds, args.tick_gap_top_n
+            )
     finally:
         await DatabaseManager.close_pool()
 
@@ -247,6 +350,24 @@ async def main_async(args: argparse.Namespace, target_date: date) -> int:
             "Upstox ohlcv gap filter healthy",
             upstox_ohlcv_gap_events <= args.max_ohlcv_gap_events,
             f"gap_events={upstox_ohlcv_gap_events}, max_allowed={args.max_ohlcv_gap_events}",
+        )
+    )
+
+    print(f"--- Tick feed silence anomalies (threshold={args.max_tick_gap_seconds}s, market hours IST) ---")
+    print_tick_gap_anomalies("upstox", upstox_gap_total, upstox_gap_top)
+    print_tick_gap_anomalies("fyers", fyers_gap_total, fyers_gap_top)
+    results.append(
+        print_check(
+            "Upstox tick feed silence within limit",
+            upstox_gap_total <= args.max_tick_gap_anomalies,
+            f"anomalies={upstox_gap_total}, max_allowed={args.max_tick_gap_anomalies}, threshold={args.max_tick_gap_seconds}s",
+        )
+    )
+    results.append(
+        print_check(
+            "Fyers tick feed silence within limit",
+            fyers_gap_total <= args.max_tick_gap_anomalies,
+            f"anomalies={fyers_gap_total}, max_allowed={args.max_tick_gap_anomalies}, threshold={args.max_tick_gap_seconds}s",
         )
     )
 

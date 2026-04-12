@@ -24,6 +24,7 @@ This document tracks the milestones achieved during the consolidation and develo
 - [x] **Live Greeks Capture + EOD Merge**: Recorder now persists provider Greeks into `broker_<provider>.options_greeks_live`, with merge utility `scripts/merge_provider_greeks_to_master.py` for `analytics.options_greeks_master`.
 - [x] **End-Of-Day Health Check**: Added `scripts/verify_eod_live_capture.py` and batch wrapper for daily EOD tick/Greeks capture verification, with log output to `logs/eod_live_capture/`.
 - [x] **Database Backup Automation**: Added `scripts/db_backup.py` for safe, rolling Docker-based TimescaleDB backups with retention and no downtime.
+- [x] **Timezone Integrity Audit & Hardening (2026-04-12)**: Full UTC/IST codebase investigation. Confirmed no DB corruption (out-of-session rows traced to legitimate Muhurat/special-session dates). Patched 5 scripts: `quick_download.py`, `quick_option_chain.py`, `aggregate_ticks_to_1min.py`, `run_eod_tick_aggregation.bat`, `merge_provider_greeks_to_master.py`. Created reusable audit tooling: `scripts/audit_timezone_integrity.py` + `scripts/run_timezone_audit.bat`. **Known remaining limitation**: live tick/Greeks timestamps reflect collector *arrival time* (UTC), not exchange *event time* — accepted as minor latency lapse, no fix planned.
 
 ## 🛠 Currently In Progress
 - **Event Bus Integration**: Migrating all services to use the asynchronous event bus in `trading_core.events`.
@@ -37,4 +38,4 @@ This document tracks the milestones achieved during the consolidation and develo
 4.  **Q4 2026**: Alpha release of Strategy Builder (Drag-and-Drop).
 
 ---
-*Last updated: 2026-04-10*
+*Last updated: 2026-04-12*

@@ -3,7 +3,7 @@ import sys
 import argparse
 import asyncio
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Path fix for monorepo imports
 sys.path.append(str(Path(__file__).parent.parent / "packages" / "trading_core"))
@@ -60,7 +60,7 @@ async def main():
                 records = []
                 for c in data:
                     ts = c[0]
-                    dt = datetime.fromtimestamp(ts)
+                    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
                     records.append((dt, args.symbol, c[1], c[2], c[3], c[4], c[5]))
                 
                 query = f"""

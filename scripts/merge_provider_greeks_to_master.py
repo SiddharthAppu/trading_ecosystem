@@ -36,7 +36,7 @@ async def merge_for_provider(conn, provider: str, target_date: date) -> str:
         INSERT INTO analytics.options_greeks_master (provider, time, symbol, delta, theta, gamma, vega, iv)
         SELECT $1, time, symbol, delta, theta, gamma, vega, iv
         FROM {source_table}
-        WHERE time::date = $2
+        WHERE (time AT TIME ZONE 'Asia/Kolkata')::date = $2
         ON CONFLICT (provider, time, symbol) DO UPDATE SET
             delta = EXCLUDED.delta,
             theta = EXCLUDED.theta,
@@ -46,7 +46,7 @@ async def merge_for_provider(conn, provider: str, target_date: date) -> str:
     """
     await conn.execute(query, provider, target_date)
 
-    count_query = f"SELECT COUNT(*) FROM {source_table} WHERE time::date = $1"
+    count_query = f"SELECT COUNT(*) FROM {source_table} WHERE (time AT TIME ZONE 'Asia/Kolkata')::date = $1"
     count = await conn.fetchval(count_query, target_date)
     return f"{provider}: merged {count} rows for {target_date}"
 

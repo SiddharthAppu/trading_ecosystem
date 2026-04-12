@@ -28,3 +28,6 @@ This document tracks upcoming features, improvements, and bugs to address in the
 ## 🧹 Technical Debt
 - [ ] **Unify Dependency Versions**: Ensure all packages/services use matching versions of common libraries (Pandas, Numpy, etc).
 - [ ] **Refactor Data Collector**: Decouple provider-specific logic into cleaner plugin-style adapters.
+
+## ⚠️ Known Limitations (Accepted)
+- **Live Tick Timestamps are Arrival-Time, not Exchange-Time**: All timestamps written by `live_recorder.py` into `market_ticks` and `options_greeks_live` use `datetime.now(timezone.utc)` — this is the moment the collector receives the message, not the exchange's event timestamp. This introduces a small latency offset (typically milliseconds, occasionally more on congested feeds). No fix is planned in the near term; the offset is negligible for strategy backtesting and replay purposes.

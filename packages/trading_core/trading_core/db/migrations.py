@@ -62,6 +62,37 @@ class MigrationManager:
     );
     SELECT create_hypertable('broker_upstox.ohlcv_1m', 'time', if_not_exists => TRUE);
 
+    -- Derived 1m OHLCV from Ticks (Hypertable with lineage)
+    CREATE TABLE IF NOT EXISTS broker_fyers.ohlcv_1min_from_ticks (
+        time TIMESTAMPTZ NOT NULL,
+        symbol TEXT NOT NULL,
+        open DOUBLE PRECISION,
+        high DOUBLE PRECISION,
+        low DOUBLE PRECISION,
+        close DOUBLE PRECISION,
+        volume BIGINT,
+        source_table TEXT NOT NULL DEFAULT 'market_ticks',
+        aggregation_timeframe TEXT NOT NULL DEFAULT '1m',
+        aggregation_run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(time, symbol)
+    );
+    SELECT create_hypertable('broker_fyers.ohlcv_1min_from_ticks', 'time', if_not_exists => TRUE);
+
+    CREATE TABLE IF NOT EXISTS broker_upstox.ohlcv_1min_from_ticks (
+        time TIMESTAMPTZ NOT NULL,
+        symbol TEXT NOT NULL,
+        open DOUBLE PRECISION,
+        high DOUBLE PRECISION,
+        low DOUBLE PRECISION,
+        close DOUBLE PRECISION,
+        volume BIGINT,
+        source_table TEXT NOT NULL DEFAULT 'market_ticks',
+        aggregation_timeframe TEXT NOT NULL DEFAULT '1m',
+        aggregation_run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(time, symbol)
+    );
+    SELECT create_hypertable('broker_upstox.ohlcv_1min_from_ticks', 'time', if_not_exists => TRUE);
+
     -- Options OHLC Table (Hypertable)
     CREATE TABLE IF NOT EXISTS broker_fyers.options_ohlc (
         time TIMESTAMPTZ NOT NULL,

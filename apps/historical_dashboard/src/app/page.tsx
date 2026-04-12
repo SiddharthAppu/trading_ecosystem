@@ -16,7 +16,13 @@ export default function Home() {
       {/* Dynamic Background */}
       <div className="fixed inset-0 z-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/10 via-zinc-950 to-emerald-900/5 pointer-events-none"></div>
 
-      <div className={`relative z-10 mx-auto px-6 py-8 transition-all duration-500 ${activeTab === 'replay' ? 'max-w-full' : 'max-w-[1400px]'}`}>
+      <div
+        className={`relative z-10 transition-all duration-500 ${
+          activeTab === 'replay'
+            ? 'w-full px-3 md:px-4 py-4'
+            : 'mx-auto max-w-[1400px] px-6 py-8'
+        }`}
+      >
         <header className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-6 border-b border-white/5 pb-8">
           <div className="flex items-center gap-3">
             <div className="p-3 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl shadow-lg shadow-indigo-500/20">
