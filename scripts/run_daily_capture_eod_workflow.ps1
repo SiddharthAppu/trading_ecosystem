@@ -182,8 +182,20 @@ if ($istHHMM -ge 1545) {
     # Step 5 - Stop capture
     Write-Host ""
     Write-Host "[5/7] Stopping capture at IST $((Get-ISTNow).ToString('HH:mm:ss'))..."
-    try { Invoke-WebRequest -UseBasicParsing -Method Post "http://localhost:8080/recorder/stop?provider=fyers"  | Out-Null } catch {}
-    try { Invoke-WebRequest -UseBasicParsing -Method Post "http://localhost:8080/recorder/stop?provider=upstox" | Out-Null } catch {}
+    Write-Host "  -> Requesting recorder stop for fyers..."
+    try {
+        Invoke-WebRequest -UseBasicParsing -Method Post "http://localhost:8080/recorder/stop?provider=fyers" -TimeoutSec 15 | Out-Null
+        Write-Host "  -> fyers stop request sent."
+    } catch {
+        Write-Host "  [WARN] fyers stop request failed or timed out: $_"
+    }
+    Write-Host "  -> Requesting recorder stop for upstox..."
+    try {
+        Invoke-WebRequest -UseBasicParsing -Method Post "http://localhost:8080/recorder/stop?provider=upstox" -TimeoutSec 15 | Out-Null
+        Write-Host "  -> upstox stop request sent."
+    } catch {
+        Write-Host "  [WARN] upstox stop request failed or timed out: $_"
+    }
     Start-Sleep -Seconds 3
     if ($RecorderProc -and -not $RecorderProc.HasExited) {
         Stop-Process -Id $RecorderProc.Id -Force -ErrorAction SilentlyContinue
