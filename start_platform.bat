@@ -13,11 +13,13 @@ if /I "%MODE%"=="replay" goto :run_replay
 if /I "%MODE%"=="execution" goto :run_execution
 if /I "%MODE%"=="uis-only" goto :run_uis_only
 if /I "%MODE%"=="collector+replay" goto :run_collector_replay
+if /I "%MODE%"=="replay-studio" goto :run_replay_studio
+if /I "%MODE%"=="historical+replay" goto :run_replay_studio
 
 echo Invalid mode: %MODE%
 echo.
 echo Usage:
-echo   start_platform.bat [all^|collector^|replay^|execution^|uis-only^|collector+replay]
+echo   start_platform.bat [all^|collector^|replay^|execution^|uis-only^|collector+replay^|replay-studio]
 echo.
 popd
 exit /b 1
@@ -126,6 +128,18 @@ call :ensure_db
 call :start_collector
 call :start_replay
 echo Launch complete: Data Collector + Replay Engine + DB
+goto :done
+
+:run_replay_studio
+echo ========================================
+echo   UNIFIED TRADING PLATFORM - START REPLAY STUDIO
+echo ========================================
+echo.
+call :ensure_db
+call :start_collector
+call :start_replay
+call :start_historical_ui
+echo Launch complete: Historical UI + Data Collector + Replay Engine + DB
 goto :done
 
 :done

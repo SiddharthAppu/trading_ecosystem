@@ -34,6 +34,17 @@ type ReplayPoint = {
     macd_histogram?: number | string;
 };
 
+// DB timestamps are stored in UTC; shift to market timezone (IST) for chart display.
+const MARKET_TZ_OFFSET_SECONDS = 5.5 * 60 * 60;
+
+function toMarketTimestamp(timeValue: string): UTCTimestamp | null {
+    const epochSeconds = Math.floor(new Date(timeValue).getTime() / 1000);
+    if (Number.isNaN(epochSeconds)) {
+        return null;
+    }
+    return (epochSeconds + MARKET_TZ_OFFSET_SECONDS) as UTCTimestamp;
+}
+
 export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
@@ -187,11 +198,14 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
         const sortedData = [...data].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
 
         sortedData.forEach(d => {
-            const unixTime = Math.floor(new Date(d.time).getTime() / 1000);
-            const chartTime = unixTime as UTCTimestamp;
+            const chartTime = toMarketTimestamp(d.time);
+            if (chartTime === null) {
+                return;
+            }
 
-            if (!isNaN(unixTime) && !seenTimes.has(unixTime)) {
-                seenTimes.add(unixTime);
+            const dedupeKey = Number(chartTime);
+            if (!seenTimes.has(dedupeKey)) {
+                seenTimes.add(dedupeKey);
 
                 // Handle different data types
                 if (dataType === 'market_ticks') {
