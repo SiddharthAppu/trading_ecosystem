@@ -15,9 +15,9 @@ if not exist "%PYTHON_EXE%" (
 if "%~1"=="" (
     for /f %%d in ('powershell -NoProfile -Command "$ist=[System.TimeZoneInfo]::FindSystemTimeZoneById('India Standard Time'); [System.TimeZoneInfo]::ConvertTimeFromUtc((Get-Date).ToUniversalTime(),$ist).AddDays(-1).ToString('yyyy-MM-dd')"') do set TARGET_DATE=%%d
     echo No --date supplied. Defaulting to yesterday IST: %TARGET_DATE%
-    "%PYTHON_EXE%" "%ROOT%\scripts\aggregate_ticks_to_1min.py" --provider all --date %TARGET_DATE%
+    "%PYTHON_EXE%" "%ROOT%\scripts\lib\aggregate_ticks_to_1min.py" --provider all --date %TARGET_DATE%
 ) else (
-    "%PYTHON_EXE%" "%ROOT%\scripts\aggregate_ticks_to_1min.py" %*
+    "%PYTHON_EXE%" "%ROOT%\scripts\lib\aggregate_ticks_to_1min.py" %*
 )
 
 endlocal

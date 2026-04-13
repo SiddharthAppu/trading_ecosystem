@@ -14,9 +14,9 @@ if not exist "%PYTHON_EXE%" (
 
 if "%~1"=="" (
     echo Running timezone audit with defaults...
-    "%PYTHON_EXE%" "%ROOT%\scripts\audit_timezone_integrity.py" --provider all
+    "%PYTHON_EXE%" "%ROOT%\scripts\lib\audit_timezone_integrity.py" --provider all
 ) else (
-    "%PYTHON_EXE%" "%ROOT%\scripts\audit_timezone_integrity.py" %*
+    "%PYTHON_EXE%" "%ROOT%\scripts\lib\audit_timezone_integrity.py" %*
 )
 
 endlocal

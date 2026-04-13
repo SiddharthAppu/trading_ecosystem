@@ -151,7 +151,7 @@ class UpstoxOptionsSync:
 
     async def run(self) -> None:
         if not self.fetcher.adapter.validate_token():
-            raise ValueError("Upstox token is invalid. Run scripts/authenticate.py or scripts/verify_auth.py first.")
+            raise ValueError("Upstox token is invalid. Run scripts/lib/authenticate.py or scripts/lib/verify_auth.py first.")
 
         start_date = parse_iso_date(self.args.start_date)
         end_date = parse_iso_date(self.args.end_date)

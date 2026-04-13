@@ -15,7 +15,7 @@ if not exist "services\data_collector\.venv\Scripts\python.exe" (
     exit /b 1
 )
 
-"services\data_collector\.venv\Scripts\python.exe" scripts\verify_eod_live_capture.py %*
+"services\data_collector\.venv\Scripts\python.exe" scripts\lib\verify_eod_live_capture.py %*
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.
