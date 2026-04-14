@@ -11,6 +11,9 @@ SUPPORTED_INDICATORS = {
     "macd",
 }
 
+# Align aggregated bars (5m/10m) to market open: 09:15 IST = 03:45 UTC.
+MARKET_BUCKET_ORIGIN_UTC = "2000-01-01 03:45:00+00"
+
 
 def _parse_indicators(raw_indicators) -> list[str]:
     if raw_indicators is None:
@@ -297,7 +300,11 @@ async def fetch_historical_series(
                     volume
                 FROM (
                     SELECT
-                        time_bucket(INTERVAL '{timeframe_minutes} minute', time) AS bucket_time,
+                        time_bucket(
+                            INTERVAL '{timeframe_minutes} minute',
+                            time,
+                            TIMESTAMPTZ '{MARKET_BUCKET_ORIGIN_UTC}'
+                        ) AS bucket_time,
                         symbol,
                         (array_agg(open ORDER BY time ASC))[1] AS open,
                         MAX(high) AS high,
