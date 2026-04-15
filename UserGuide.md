@@ -87,7 +87,7 @@ Merge provider Greeks into the master table (run after EOD check):
 ### Database Backup & Restore
 Create a rolling backup of the TimescaleDB database (safe to run live, no downtime):
 ```powershell
-.\services\data_collector\.venv\Scripts\python.exe scripts\db_backup.py --max 5
+.\services\data_collector\.venv\Scripts\python.exe scripts\db_backup.py --max 30
 ```
 Backups are stored in `db_backups/` and old backups are purged automatically.
 

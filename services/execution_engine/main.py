@@ -1,7 +1,8 @@
 import asyncio
 import logging
 from datetime import datetime
-from trading_core.events import bus, EventType, Tick, TickEvent
+from trading_core.events import bus, TickEvent
+from trading_core.models import Tick
 from trading_core.strategies import Strategy, StrategyContext
 from services.execution_engine.portfolio import PortfolioManager
 from services.execution_engine.executor import PaperExecutor
@@ -22,7 +23,7 @@ class ExecutionEngine:
         ctx.link_portfolio(self.portfolio)
         self.strategy = strategy_class(ctx)
         self.strategy.on_init()
-        logger.info(f"Strategy {strategy_class.__name__} loaded.")
+        logger.info("Strategy %s loaded.", strategy_class.__name__)
 
     async def start(self):
         logger.info("Execution Engine Started.")
@@ -33,7 +34,7 @@ class ExecutionEngine:
         # (This is where Step 4 will come in: connecting to Data Collector or Replay)
         
         symbol = "NIFTY26MAR24500CE"
-        logger.info(f"Simulating market data for {symbol}...")
+        logger.info("Simulating market data for %s...", symbol)
         
         for price in [100.0, 105.0, 110.0, 95.0, 102.0]:
             tick = Tick(symbol=symbol, price=price, timestamp=datetime.now(), volume=0)

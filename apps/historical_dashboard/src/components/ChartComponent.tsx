@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
     createChart,
     ColorType,
@@ -34,6 +34,21 @@ type ReplayPoint = {
     macd_histogram?: number | string;
 };
 
+type LogicalRange = {
+    from: number;
+    to: number;
+};
+
+type ChartComponentProps = {
+    data: ReplayPoint[];
+    paneId?: number;
+    syncEnabled?: boolean;
+    sharedVisibleRange?: LogicalRange | null;
+    onVisibleRangeChange?: (paneId: number, range: LogicalRange | null) => void;
+    sharedHoverTime?: number | null;
+    onHoverTimeChange?: (paneId: number, time: number | null) => void;
+};
+
 // DB timestamps are stored in UTC; shift to market timezone (IST) for chart display.
 const MARKET_TZ_OFFSET_SECONDS = 5.5 * 60 * 60;
 
@@ -45,7 +60,15 @@ function toMarketTimestamp(timeValue: string): UTCTimestamp | null {
     return (epochSeconds + MARKET_TZ_OFFSET_SECONDS) as UTCTimestamp;
 }
 
-export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
+export default function ChartComponent({
+    data,
+    paneId = 0,
+    syncEnabled = false,
+    sharedVisibleRange = null,
+    onVisibleRangeChange,
+    sharedHoverTime = null,
+    onHoverTimeChange,
+}: ChartComponentProps) {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -56,6 +79,8 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
     const rsiSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
     const macdSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
     const macdSignalSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+    const suppressRangeBroadcastRef = useRef(false);
+    const [hoverLineX, setHoverLineX] = useState<number | null>(null);
 
     // Determine data type from first data point
     const getDataType = (dataPoints: ReplayPoint[]) => {
@@ -171,13 +196,73 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
             }
         };
 
+        const handleVisibleRangeChange = (range: { from: number; to: number } | null) => {
+            if (!syncEnabled || !onVisibleRangeChange) {
+                return;
+            }
+            if (suppressRangeBroadcastRef.current) {
+                suppressRangeBroadcastRef.current = false;
+                return;
+            }
+            if (!range) {
+                onVisibleRangeChange(paneId, null);
+                return;
+            }
+            onVisibleRangeChange(paneId, { from: range.from, to: range.to });
+        };
+
+        const handleCrosshairMove = (param: { time?: unknown; point?: { x: number } }) => {
+            if (!syncEnabled || !onHoverTimeChange) {
+                return;
+            }
+
+            const rawTime = param?.time;
+            if (typeof rawTime === 'number') {
+                onHoverTimeChange(paneId, rawTime);
+            } else if (rawTime === undefined || rawTime === null) {
+                onHoverTimeChange(paneId, null);
+            }
+
+            if (param?.point && typeof param.point.x === 'number') {
+                setHoverLineX(param.point.x);
+            }
+        };
+
         window.addEventListener('resize', handleResize);
+        chart.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleRangeChange);
+        chart.subscribeCrosshairMove(handleCrosshairMove);
 
         return () => {
             window.removeEventListener('resize', handleResize);
+            chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleRangeChange);
+            chart.unsubscribeCrosshairMove(handleCrosshairMove);
             chart.remove();
         };
-    }, []);
+    }, [onHoverTimeChange, onVisibleRangeChange, paneId, syncEnabled]);
+
+    useEffect(() => {
+        if (!syncEnabled || !sharedVisibleRange || !chartRef.current) {
+            return;
+        }
+
+        suppressRangeBroadcastRef.current = true;
+        chartRef.current.timeScale().setVisibleLogicalRange({
+            from: sharedVisibleRange.from,
+            to: sharedVisibleRange.to,
+        });
+    }, [sharedVisibleRange, syncEnabled]);
+
+    useEffect(() => {
+        if (!syncEnabled || !chartRef.current || sharedHoverTime === null) {
+            if (!syncEnabled || sharedHoverTime === null) {
+                setHoverLineX(null);
+            }
+            return;
+        }
+
+        const x = chartRef.current.timeScale().timeToCoordinate(sharedHoverTime as UTCTimestamp);
+        setHoverLineX(typeof x === 'number' ? x : null);
+    }, [sharedHoverTime, syncEnabled, data]);
 
     // 2. Update Data when it changes
     useEffect(() => {
@@ -326,6 +411,12 @@ export default function ChartComponent({ data }: { data: ReplayPoint[] }) {
 
     return (
         <div className="w-full h-full relative bg-zinc-950/20 rounded-xl overflow-hidden" ref={chartContainerRef}>
+            {syncEnabled && hoverLineX !== null && (
+                <div
+                    className="absolute top-0 bottom-0 w-px bg-cyan-400/70 pointer-events-none z-20"
+                    style={{ left: `${hoverLineX}px` }}
+                />
+            )}
             {(!data || data.length === 0) && (
                 <div className="absolute inset-0 flex items-center justify-center text-zinc-500 flex-col gap-3 z-10 bg-zinc-950/50">
                     <div className="w-16 h-16 border-4 border-zinc-800 border-t-zinc-600 rounded-full animate-spin"></div>

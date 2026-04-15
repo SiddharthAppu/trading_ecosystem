@@ -107,6 +107,16 @@ async def auth_url(provider: str = "fyers"):
     adapter = get_adapter(provider)
     return {"url": adapter.generate_auth_link()}
 
+@app.post("/auth/reload")
+async def auth_reload(provider: str = "fyers"):
+    """Reload the access token from disk into the in-memory adapter singleton.
+    Does NOT make a live broker API call — use /auth/status for full validation.
+    Call this after authenticate.py saves a fresh token so the service state stays in sync."""
+    adapter = get_adapter(provider)
+    token = adapter._load_token()
+    adapter._access_token = token
+    return {"provider": provider, "reloaded": True, "has_token": bool(token)}
+
 @app.post("/download")
 async def download_symbol(req: DownloadRequest):
     adapter = get_adapter(req.provider)
@@ -141,6 +151,46 @@ async def stop_recorder(provider: str = "fyers"):
 @app.get("/recorder/status")
 async def recorder_status(provider: str = "fyers"):
     return recorder_manager.get_status(provider)
+
+@app.get("/ticks/count-today")
+async def ticks_count_today():
+    """Return count of market ticks captured today (IST) from both brokers."""
+    import asyncpg
+    from datetime import datetime, timedelta, timezone
+    
+    pool = await DatabaseManager.get_pool()
+    
+    # Calculate today's IST date boundary
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(IST)
+    today_start = now_ist.replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=timezone.utc) - timedelta(hours=5, minutes=30)
+    today_end = today_start + timedelta(days=1)
+    
+    try:
+        async with pool.acquire() as conn:
+            fyers_count = await conn.fetchval(
+                'SELECT COUNT(*) FROM broker_fyers.market_ticks WHERE time >= $1 AND time < $2',
+                today_start, today_end
+            )
+            upstox_count = await conn.fetchval(
+                'SELECT COUNT(*) FROM broker_upstox.market_ticks WHERE time >= $1 AND time < $2',
+                today_start, today_end
+            )
+            return {
+                "status": "success",
+                "today_ist": now_ist.strftime("%Y-%m-%d"),
+                "fyers_ticks": int(fyers_count or 0),
+                "upstox_ticks": int(upstox_count or 0),
+                "total_ticks": int((fyers_count or 0) + (upstox_count or 0))
+            }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "fyers_ticks": 0,
+            "upstox_ticks": 0,
+            "total_ticks": 0
+        }
 
 @app.post("/recorder/subscribe")
 async def subscribe_recorder(req: SubscribeRequest):
@@ -536,8 +586,69 @@ VALID_DATA_TYPES = {
 async def available_symbols(
     provider: str = Query("fyers", description="Provider: fyers or upstox"),
     data_type: str = Query("options_ohlc", description="Table: market_ticks, ohlcv_1m, ohlcv_1min_from_ticks, options_ohlc"),
+    from_time: Optional[str] = Query(None, description="Optional ISO start time filter"),
+    to_time: Optional[str] = Query(None, description="Optional ISO end time filter"),
+    expiry_date: Optional[str] = Query(None, description="Optional expiry token/date filter matched against symbol"),
 ):
     """Return the distinct symbols available in the selected provider/table combination."""
+    p = provider.lower()
+    if p not in ("fyers", "upstox"):
+        raise HTTPException(400, f"Invalid provider: {provider!r}. Must be 'fyers' or 'upstox'.")
+    if data_type not in VALID_DATA_TYPES:
+        raise HTTPException(400, f"Invalid data_type: {data_type!r}. Must be one of {list(VALID_DATA_TYPES)}.")
+
+    schema = "broker_upstox" if p == "upstox" else "broker_fyers"
+    table = VALID_DATA_TYPES[data_type]
+    q_table = f"{_quote_ident(schema)}.{_quote_ident(table)}"
+
+    where_parts = []
+    where_args = []
+
+    if from_time:
+        dt = _parse_datetime_input(from_time, "from_time")
+        where_args.append(dt)
+        where_parts.append(f"time >= ${len(where_args)}")
+
+    if to_time:
+        dt = _parse_datetime_input(to_time, "to_time", end_of_day=True)
+        where_args.append(dt)
+        where_parts.append(f"time <= ${len(where_args)}")
+
+    normalized_expiry = (expiry_date or "").strip()
+    if normalized_expiry:
+        where_args.append(f"%{normalized_expiry.upper()}%")
+        where_parts.append(f"UPPER(symbol) LIKE ${len(where_args)}")
+
+    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+    pool = await DatabaseManager.get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT DISTINCT symbol FROM {q_table} {where_sql} ORDER BY symbol ASC",
+            *where_args,
+        )
+
+    symbols = [r["symbol"] for r in rows]
+    return {
+        "status": "success",
+        "provider": p,
+        "data_type": data_type,
+        "symbols": symbols,
+        "filters": {
+            "from_time": from_time,
+            "to_time": to_time,
+            "expiry_date": normalized_expiry or None,
+        },
+    }
+
+
+@app.get("/available-expiry-options")
+async def available_expiry_options(
+    provider: str = Query("fyers", description="Provider: fyers or upstox"),
+    data_type: str = Query("options_ohlc", description="Table with symbol column"),
+    lookback_days: int = Query(30, ge=1, le=365, description="How many recent days to scan for expiries"),
+):
+    """Return distinct expiry tokens inferred from symbols for recent data window."""
     p = provider.lower()
     if p not in ("fyers", "upstox"):
         raise HTTPException(400, f"Invalid provider: {provider!r}. Must be 'fyers' or 'upstox'.")
@@ -551,11 +662,25 @@ async def available_symbols(
     pool = await DatabaseManager.get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"SELECT DISTINCT symbol FROM {q_table} ORDER BY symbol ASC"
+            f"""
+            SELECT DISTINCT
+                SUBSTRING(UPPER(symbol) FROM '([0-9]{{2}}[A-Z]{{3}}[0-9]{{2}})') AS expiry_token
+            FROM {q_table}
+            WHERE time >= NOW() - ($1::text || ' days')::interval
+              AND symbol ~ '[0-9]{{2}}[A-Za-z]{{3}}[0-9]{{2}}'
+            ORDER BY expiry_token ASC
+            """,
+            lookback_days,
         )
 
-    symbols = [r["symbol"] for r in rows]
-    return {"status": "success", "provider": p, "data_type": data_type, "symbols": symbols}
+    expiries = [r["expiry_token"] for r in rows if r["expiry_token"]]
+    return {
+        "status": "success",
+        "provider": p,
+        "data_type": data_type,
+        "lookback_days": lookback_days,
+        "expiry_options": expiries,
+    }
 
 
 if __name__ == "__main__":

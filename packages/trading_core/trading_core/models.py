@@ -52,6 +52,7 @@ class Order:
     quantity: int
     order_type: OrderType = OrderType.MARKET
     price: Optional[float] = None
+    tag: str = ""
     status: OrderStatus = OrderStatus.PENDING
     order_id: str = field(default_factory=lambda: f"ord_{uuid.uuid4().hex[:8]}")
     created_at: datetime = field(default_factory=datetime.now)

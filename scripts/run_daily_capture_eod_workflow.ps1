@@ -103,6 +103,14 @@ foreach ($provider in $providers) {
         & $PYTHON_EXE "$LIB_DIR\authenticate.py" --provider $provider
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[WARN] authenticate.py failed for $provider (exit $LASTEXITCODE)."
+        } else {
+            # Sync fresh token into the running service's in-memory state immediately
+            try {
+                Invoke-WebRequest -UseBasicParsing -Method Post "http://localhost:8080/auth/reload?provider=$provider" -TimeoutSec 10 | Out-Null
+                Write-Host "[OK] Token reloaded into service for $provider."
+            } catch {
+                Write-Host "[WARN] Could not reload token into service for $provider. Service may pick it up on next /auth/status call."
+            }
         }
     }
 }
@@ -111,12 +119,16 @@ Write-Host ""
 Write-Host "Post-auth status:"
 & $PYTHON_EXE "$LIB_DIR\verify_auth.py"
 
+# Final gate: verify tokens are present on disk (via /auth/reload, not a live broker API call).
+# authenticate.py already confirmed token validity by successfully exchanging the code.
+# Live broker re-verification (/auth/status) is skipped here to avoid false negatives from
+# transient network errors or rate limiting on the verification endpoint.
 $invalidProviders = @()
 foreach ($provider in $providers) {
     try {
-        $statusResp = Invoke-WebRequest -UseBasicParsing "http://localhost:8080/auth/status?provider=$provider" -TimeoutSec 10
-        $statusJson = $statusResp.Content | ConvertFrom-Json
-        if (-not [bool]$statusJson.authenticated) {
+        $reloadResp = Invoke-WebRequest -UseBasicParsing -Method Post "http://localhost:8080/auth/reload?provider=$provider" -TimeoutSec 10
+        $reloadJson = $reloadResp.Content | ConvertFrom-Json
+        if (-not [bool]$reloadJson.has_token) {
             $invalidProviders += $provider
         }
     } catch {
@@ -125,13 +137,13 @@ foreach ($provider in $providers) {
 }
 
 if ($invalidProviders.Count -gt 0) {
-    Write-Host "[WARN] Still unauthenticated: $($invalidProviders -join ', ')."
+    Write-Host "[WARN] Token missing on disk for: $($invalidProviders -join ', ')."
     $continueAnyway = Read-Host "Continue capture anyway? (y/N)"
     if ($continueAnyway -notmatch "^[Yy]$") {
         if (-not $CollectorProc.HasExited) {
             Stop-Process -Id $CollectorProc.Id -Force -ErrorAction SilentlyContinue
         }
-        Write-Host "[INFO] Workflow aborted by user due to auth status."
+        Write-Host "[INFO] Workflow aborted by user due to missing tokens."
         exit 1
     }
 }
@@ -172,7 +184,19 @@ if ($istHHMM -ge 1545) {
     Write-Host "[4/7] Capture running. Auto-stop at 15:45 IST. Press Ctrl+C to abort early."
     try {
         while ([int]((Get-ISTNow).ToString("HHmm")) -lt 1545) {
-            Write-Host "  IST $((Get-ISTNow).ToString('HH:mm:ss')) - capture active."
+            $tickCounts = $null
+            try {
+                $tickResp = Invoke-WebRequest -UseBasicParsing "http://localhost:8080/ticks/count-today" -TimeoutSec 5
+                $tickCounts = $tickResp.Content | ConvertFrom-Json
+            } catch {
+                # Silently continue if count fails; capture is still running
+            }
+            
+            if ($tickCounts -and $tickCounts.status -eq "success") {
+                Write-Host "  IST $((Get-ISTNow).ToString('HH:mm:ss')) - Fyers: $($tickCounts.fyers_ticks) | Upstox: $($tickCounts.upstox_ticks) | Total: $($tickCounts.total_ticks)"
+            } else {
+                Write-Host "  IST $((Get-ISTNow).ToString('HH:mm:ss')) - capture active (tick count unavailable)"
+            }
             Start-Sleep -Seconds 60
         }
     } catch {

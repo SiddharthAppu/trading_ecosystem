@@ -31,7 +31,7 @@ class FyersAdapter(BrokerAdapter):
 
     def _get_client(self):
         if not self._access_token:
-            print(f"WARNING: FYERS access token not set at {TOKEN_FILE}. API calls may fail.")
+            print("WARNING: FYERS access token not set. API calls may fail.")
         return fyersModel.FyersModel(
             client_id=CLIENT_ID,
             is_async=False,

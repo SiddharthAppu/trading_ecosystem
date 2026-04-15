@@ -1,6 +1,7 @@
 import asyncio
 import json
 import websockets
+from aiohttp import web
 from trading_core.db import DatabaseManager
 
 
@@ -238,6 +239,28 @@ def _parse_timeframe(timeframe: str | None) -> tuple[str, int]:
 def _supports_timeframe_aggregation(data_type: str) -> bool:
     return data_type in ("ohlcv_1m", "ohlcv_1min_from_ticks")
 
+
+def _parse_query_indicators(raw_values: list[str]) -> list[str]:
+    if not raw_values:
+        return []
+
+    if len(raw_values) == 1 and "," in raw_values[0]:
+        return _parse_indicators(raw_values[0])
+
+    return _parse_indicators(raw_values)
+
+
+def _cors_headers() -> dict[str, str]:
+    return {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+    }
+
+
+def _json_cors(payload: dict, status: int = 200) -> web.Response:
+    return web.json_response(payload, status=status, headers=_cors_headers())
+
 async def fetch_historical_series(
     symbol: str,
     provider: str = "fyers",
@@ -417,10 +440,84 @@ async def replay_handler(websocket):
         except Exception:
             pass
 
+
+async def load_replay_handler(request: web.Request) -> web.Response:
+    if request.method == "OPTIONS":
+        return web.Response(status=204, headers=_cors_headers())
+
+    query = request.query
+
+    symbol = (query.get("symbol") or "").strip()
+    provider = (query.get("provider") or "fyers").strip().lower()
+    data_type = (query.get("data_type") or "options_ohlc").strip()
+    timeframe = (query.get("timeframe") or "1m").strip().lower()
+    start_time = (query.get("start_time") or "").strip() or None
+    end_time = (query.get("end_time") or "").strip() or None
+    indicators_raw = query.getall("indicators", [])
+
+    if not symbol:
+        return _json_cors({"error": "symbol is required"}, status=400)
+
+    try:
+        get_table_name(data_type, provider)
+        _parse_timeframe(timeframe)
+        parsed_indicators = _parse_query_indicators(indicators_raw)
+        if parsed_indicators and not _supports_indicators(data_type):
+            raise ValueError(
+                f"Indicators are not supported for data_type={data_type}. "
+                "Use ohlcv_1m, ohlcv_1min_from_ticks, or options_ohlc."
+            )
+    except ValueError as e:
+        return _json_cors({"error": str(e)}, status=400)
+
+    try:
+        rows = await fetch_historical_series(
+            symbol=symbol,
+            provider=provider,
+            data_type=data_type,
+            start_time=start_time,
+            end_time=end_time,
+            timeframe=timeframe,
+            indicators=parsed_indicators,
+        )
+    except Exception as e:
+        return _json_cors({"error": f"Database error: {str(e)}"}, status=500)
+
+    for row in rows:
+        row["time"] = row["time"].isoformat()
+
+    return _json_cors({
+        "status": "success",
+        "symbol": symbol,
+        "provider": provider,
+        "data_type": data_type,
+        "timeframe": timeframe,
+        "indicators": parsed_indicators,
+        "record_count": len(rows),
+        "records": rows,
+    })
+
+
+async def start_http_server() -> web.AppRunner:
+    app = web.Application()
+    app.router.add_get("/replay/load", load_replay_handler)
+    app.router.add_options("/replay/load", load_replay_handler)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "localhost", 8766)
+    await site.start()
+    return runner
+
 async def main():
     print("Starting Replay Server on ws://localhost:8765")
-    async with websockets.serve(replay_handler, "localhost", 8765):
-        await asyncio.Future()
+    print("Starting Replay HTTP API on http://localhost:8766/replay/load")
+    http_runner = await start_http_server()
+    try:
+        async with websockets.serve(replay_handler, "localhost", 8765):
+            await asyncio.Future()
+    finally:
+        await http_runner.cleanup()
 
 if __name__ == "__main__":
     asyncio.run(main())

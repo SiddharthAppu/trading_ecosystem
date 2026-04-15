@@ -147,7 +147,7 @@ Verifies if you have any missing calendar days or data leaks inside your downloa
 **3. Snapshot Backup & Version Control**  
 Uses Docker natively to securely backup your full database into version-controlled `.sql` files without stopping your environment. Automatically purges old backups past limit.
 ```powershell
-.\services\data_collector\.venv\Scripts\python.exe scripts\db_backup.py --max 5
+.\services\data_collector\.venv\Scripts\python.exe scripts\db_backup.py --max 30
 ```
 
 **4. Nuclear Reset**  

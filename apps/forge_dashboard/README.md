@@ -16,6 +16,21 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## Runtime Monitor Setup
+
+The Runtime page in Forge uses a separate backend service.
+
+- `NEXT_PUBLIC_API_URL` points to the existing Forge backend (default: `http://localhost:8000`)
+- `NEXT_PUBLIC_RUNTIME_API_URL` points to the new strategy runtime API (default: `http://localhost:8090`)
+
+Example:
+
+```bash
+set NEXT_PUBLIC_API_URL=http://localhost:8000
+set NEXT_PUBLIC_RUNTIME_API_URL=http://localhost:8090
+npm run dev
+```
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.

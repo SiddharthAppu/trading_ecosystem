@@ -1,7 +1,6 @@
 import json
 import os
 from datetime import date, datetime
-from statistics import median
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -123,9 +122,24 @@ class UpstoxAdapter(BrokerAdapter):
         return access_token
 
     def get_historical_data(self, symbol: str, start_date: str, end_date: str, resolution: str = "1"):
-        from datetime import datetime, timedelta
+        from datetime import timedelta
         instrument_key = UPSTOX_UNDERLYING_KEYS.get(symbol, symbol)
-        interval = "1minute" if resolution in {"1", "1m"} else "day"
+        interval_map = {
+            "1": "1minute",
+            "1m": "1minute",
+            "5": "5minute",
+            "5m": "5minute",
+            "10": "10minute",
+            "10m": "10minute",
+            "15": "15minute",
+            "15m": "15minute",
+            "30": "30minute",
+            "30m": "30minute",
+            "D": "day",
+            "1d": "day",
+            "day": "day",
+        }
+        interval = interval_map.get(str(resolution).strip().lower(), "day")
 
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
