@@ -2,6 +2,8 @@
 echo Starting Replay Engine Service...
 :: Get project root relative to script location
 set "ROOT=%~dp0.."
+set "TRADING_CONFIG_DIR=%ROOT%\config"
+set "TRADING_AUTH_DIR=%ROOT%\config\auth"
 
 call :is_port_listening 8765
 if %ERRORLEVEL%==0 (

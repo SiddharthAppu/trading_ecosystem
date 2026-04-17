@@ -52,7 +52,9 @@ type ReplayMode = 'stream' | 'load';
 type LogicalRange = { from: number; to: number };
 
 const MAX_PANES = 4;
-const REPLAY_LOAD_API = 'http://localhost:8766/replay/load';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8080';
+const REPLAY_LOAD_API = process.env.NEXT_PUBLIC_REPLAY_LOAD_API || 'http://localhost:8766/replay/load';
+const REPLAY_WS_URL = process.env.NEXT_PUBLIC_REPLAY_WS_URL || 'ws://localhost:8765';
 
 function createInitialPane(): PaneState {
     return {
@@ -142,7 +144,7 @@ export default function ReplayControl() {
                 params.set('expiry_date', expiryDate);
             }
 
-            const res = await fetch(`http://localhost:8080/available-symbols?${params.toString()}`);
+            const res = await fetch(`${API_BASE}/available-symbols?${params.toString()}`);
             const data = await res.json();
             updatePaneState(paneIndex, prev => ({
                 ...prev,
@@ -151,7 +153,11 @@ export default function ReplayControl() {
             }));
         } catch (err) {
             console.error('Failed to fetch symbols', err);
-            updatePaneState(paneIndex, prev => ({ ...prev, symbolsLoading: false, status: 'Failed to load symbols' }));
+            updatePaneState(paneIndex, prev => ({
+                ...prev,
+                symbolsLoading: false,
+                status: `Failed to load symbols (check Data Collector at ${API_BASE})`,
+            }));
         }
     };
 
@@ -193,7 +199,7 @@ export default function ReplayControl() {
                 data_type: chosenDataType,
                 lookback_days: '30',
             });
-            const res = await fetch(`http://localhost:8080/available-expiry-options?${params.toString()}`);
+            const res = await fetch(`${API_BASE}/available-expiry-options?${params.toString()}`);
             const data = await res.json();
             if (data.status === 'success') {
                 setExpiryOptions(data.expiry_options || []);
@@ -251,7 +257,7 @@ export default function ReplayControl() {
         liveStreamsRef.current = runnable.length;
 
         runnable.forEach(({ idx, pane }) => {
-            const ws = new WebSocket('ws://localhost:8765');
+            const ws = new WebSocket(REPLAY_WS_URL);
             wsRefs.current.set(idx, ws);
 
             ws.onopen = () => {

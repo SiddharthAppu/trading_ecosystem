@@ -4,6 +4,8 @@ set "ROOT_DIR=%~dp0"
 pushd "%ROOT_DIR%"
 
 set "PYTHONPATH=%ROOT_DIR%"
+set "TRADING_CONFIG_DIR=%ROOT_DIR%config"
+set "TRADING_AUTH_DIR=%ROOT_DIR%config\auth"
 set "USE_WT=0"
 set "MODE=%~1"
 
@@ -55,7 +57,7 @@ echo   replay            - Start DB + replay engine only.
 echo   execution         - Start DB + execution engine only.
 echo   uis-only          - Start historical dashboard + forge dashboard only.
 echo   collector+replay  - Start DB + data collector + replay engine.
-echo   replay-studio     - Start DB + replay engine + historical dashboard.
+echo   replay-studio     - Start DB + data collector + replay engine + historical dashboard.
 echo   status            - Show running services, ports, PIDs and process names.
 echo.
 echo Notes:
@@ -243,9 +245,10 @@ echo   UNIFIED TRADING PLATFORM - START REPLAY STUDIO
 echo ========================================
 echo.
 call :ensure_db
+call :start_collector
 call :start_replay
 call :start_historical_ui
-echo Launch complete: Historical UI + Replay Engine + DB
+echo Launch complete: Historical UI + Data Collector + Replay Engine + DB
 goto :done
 
 :run_status
