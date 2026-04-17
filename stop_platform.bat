@@ -9,11 +9,13 @@ if /I "%MODE%"=="replay" goto :stop_replay
 if /I "%MODE%"=="execution" goto :stop_execution
 if /I "%MODE%"=="uis-only" goto :stop_uis_only
 if /I "%MODE%"=="collector+replay" goto :stop_collector_replay
+if /I "%MODE%"=="replay-studio" goto :stop_replay_studio
+if /I "%MODE%"=="historical+replay" goto :stop_replay_studio
 
 echo Invalid mode: %MODE%
 echo.
 echo Usage:
-echo   stop_platform.bat [all^|collector^|replay^|execution^|uis-only^|collector+replay]
+echo   stop_platform.bat [all^|collector^|replay^|execution^|uis-only^|collector+replay^|replay-studio]
 echo.
 exit /b 1
 
@@ -83,6 +85,15 @@ echo ========================================
 taskkill /FI "WINDOWTITLE eq DATA COLLECTOR*" /T /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq REPLAY ENGINE*" /T /F >nul 2>&1
 echo Collector and replay processes terminated.
+goto :done
+
+:stop_replay_studio
+echo ========================================
+echo   UNIFIED TRADING PLATFORM - STOP REPLAY STUDIO
+echo ========================================
+taskkill /FI "WINDOWTITLE eq REPLAY ENGINE*" /T /F >nul 2>&1
+taskkill /FI "WINDOWTITLE eq HISTORICAL UI*" /T /F >nul 2>&1
+echo Replay Engine and Historical UI processes terminated.
 goto :done
 
 :done

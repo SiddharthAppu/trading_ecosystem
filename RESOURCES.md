@@ -22,6 +22,20 @@ trading_ecosystem/
 
 ## 🛠️ Developer Information
 
+### Startup Presets
+- `start_platform.bat all`: Full stack (DB + collector + replay + execution + UIs).
+- `start_platform.bat replay-studio`: Replay-only stack (DB + replay engine + historical dashboard).
+- `start_platform.bat collector+replay`: DB + collector + replay engine.
+- `start_platform.bat collector`: DB + collector.
+- `start_platform.bat replay`: DB + replay engine.
+
+### Replay Studio Runtime Contract
+- Historical Dashboard Replay Studio uses the replay engine endpoints directly:
+	- WebSocket stream: `ws://localhost:8765`
+	- Load API: `http://localhost:8766/replay/load`
+- Replay Studio does not require the live data collector process unless you are also recording new market data.
+- Startup launcher now waits for TimescaleDB health before starting dependent services.
+
 ### 🌍 Global Ports mapped
 - **Historical UI**: `http://localhost:3000`
 - **Data Collector API**: `http://localhost:8080`
@@ -37,7 +51,7 @@ New strategies should be placed in `services/execution_engine/strategies/` and i
 
 ### ✅ Verification Steps
 1.  Verify database connection in `config/.env`.
-2.  Run `start_platform.bat`.
+2.  Run `start_platform.bat replay-studio` for replay workflows, or `start_platform.bat all` for the full platform.
 3.  Historical Dashboard should load on port `3000`.
 
 ---

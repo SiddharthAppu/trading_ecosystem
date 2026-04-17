@@ -5,11 +5,17 @@ This guide provides basic instructions on how to use and navigate the unified tr
 ## 🏁 Getting Started
 1.  **Dependencies**: Ensure Python 3.9+ and Node.js 18+ are installed.
 2.  **Configuration**: Modify `config/.env` with your database and API credentials.
-3.  **Startup**: Run `.\start_platform.bat` at the root of the project. This will open four terminal windows:
+3.  **Startup**: Run `.\start_platform.bat` at the root of the project. The default mode opens four terminal windows:
     - **DATA COLLECTOR**: Market connectivity and live data recording.
     - **REPLAY ENGINE**: Historical playback server.
     - **EXECUTION ENGINE**: Strategy orchestration.
     - **MAIN DASHBOARD**: Historical Dashboard (Next.js) on [http://localhost:3000](http://localhost:3000).
+
+### Startup Presets
+- `.\start_platform.bat replay-studio`: Starts TimescaleDB, Replay Engine, and Historical Dashboard only. This preset is intended for historical replay and does not start the live Data Collector.
+- `.\start_platform.bat collector`: Starts TimescaleDB and the live Data Collector.
+- `.\start_platform.bat collector+replay`: Starts TimescaleDB, Data Collector, and Replay Engine.
+- `.\start_platform.bat all`: Starts the full local stack.
 
 ## 🧭 Platform Navigation
 The platform consists of several internal apps and services:
@@ -18,6 +24,8 @@ The platform consists of several internal apps and services:
 - **Live Data View**: View real-time ticks and OHLC data during market hours.
 - **Backtesting/Replay**: Start a replay of historical data for any selected date and instrument.
 - **Session Replay UI**: A two-column interface for reviewing trading sessions with screenshots.
+
+Replay Studio uses the Replay Engine on `ws://localhost:8765` and `http://localhost:8766/replay/load`. It reads historical data from TimescaleDB and does not require the live collector process unless you are also recording fresh market data.
 
 ### 🔨 Strategy Forge ([http://localhost:3001](http://localhost:3001) - TBD)
 - **Strategy Builder**: A visual tool to define rules for entries and exits.
@@ -50,6 +58,7 @@ To add a new strategy:
 - **Port Conflict**: If port 3000 or 8080 is in use, modify the `.env` or application settings.
 - **Database Error**: Ensure PostgreSQL/TimescaleDB is running and accessible from your network.
 - **API Authentication**: Check `config/auth/` for valid Fyers/Upstox access tokens.
+- **Replay Studio While Daily Capture Runs**: Prefer `.\start_platform.bat replay-studio`. It avoids starting a second collector instance and now waits for TimescaleDB to become healthy before launching services.
 
 ## 📡 Live Recorder & EOD Workflows
 

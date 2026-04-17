@@ -22,6 +22,13 @@ if (-not (Test-Path $LOG_DIR)) { New-Item -ItemType Directory -Path $LOG_DIR -Fo
 $IST_TZ = [System.TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
 function Get-ISTNow { [System.TimeZoneInfo]::ConvertTimeFromUtc((Get-Date).ToUniversalTime(), $script:IST_TZ) }
 
+function Test-PortListening {
+    param([int]$Port)
+
+    $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    return (($connections | Measure-Object).Count -gt 0)
+}
+
 $TRADE_DATE    = (Get-ISTNow).ToString("yyyy-MM-dd")
 $RUN_STAMP     = (Get-Date).ToString("yyyyMMdd_HHmmss")
 $COLLECTOR_OUT = "$LOG_DIR\collector_${RUN_STAMP}.out.log"
@@ -37,24 +44,32 @@ Write-Host "Collector log  : $COLLECTOR_OUT"
 Write-Host "Recorder log   : $RECORDER_OUT"
 Write-Host "================================================================"
 
-# Step 1 - Start Data Collector in background
+# Step 1 - Start Data Collector in background (or reuse if already running)
 Write-Host ""
 Write-Host "[1/7] Starting Data Collector service..."
-$CollectorProc = Start-Process `
-    -FilePath         $PYTHON_EXE `
-    -ArgumentList     "main.py" `
-    -WorkingDirectory $COLLECTOR_DIR `
-    -RedirectStandardOutput $COLLECTOR_OUT `
-    -RedirectStandardError  $COLLECTOR_ERR `
-    -NoNewWindow `
-    -PassThru
+$StartedCollector = $false
 
-if (-not $CollectorProc) {
-    Write-Error "ERROR: Failed to start Data Collector."
-    exit 1
+if (Test-PortListening -Port 8080) {
+    Write-Host "[INFO] Port 8080 already in use. Reusing existing Data Collector."
+} else {
+    $CollectorProc = Start-Process `
+        -FilePath         $PYTHON_EXE `
+        -ArgumentList     "main.py" `
+        -WorkingDirectory $COLLECTOR_DIR `
+        -RedirectStandardOutput $COLLECTOR_OUT `
+        -RedirectStandardError  $COLLECTOR_ERR `
+        -NoNewWindow `
+        -PassThru
+
+    if (-not $CollectorProc) {
+        Write-Error "ERROR: Failed to start Data Collector."
+        exit 1
+    }
+
+    $StartedCollector = $true
+    Write-Host "[OK] Data Collector started with PID $($CollectorProc.Id). Waiting 10s for FastAPI startup..."
+    Start-Sleep -Seconds 10
 }
-Write-Host "[OK] Data Collector started with PID $($CollectorProc.Id). Waiting 10s for FastAPI startup..."
-Start-Sleep -Seconds 10
 
 try {
     $resp = Invoke-WebRequest -UseBasicParsing "http://localhost:8080/health" -TimeoutSec 5
@@ -140,7 +155,7 @@ if ($invalidProviders.Count -gt 0) {
     Write-Host "[WARN] Token missing on disk for: $($invalidProviders -join ', ')."
     $continueAnyway = Read-Host "Continue capture anyway? (y/N)"
     if ($continueAnyway -notmatch "^[Yy]$") {
-        if (-not $CollectorProc.HasExited) {
+        if ($StartedCollector -and $CollectorProc -and -not $CollectorProc.HasExited) {
             Stop-Process -Id $CollectorProc.Id -Force -ErrorAction SilentlyContinue
         }
         Write-Host "[INFO] Workflow aborted by user due to missing tokens."
@@ -150,6 +165,7 @@ if ($invalidProviders.Count -gt 0) {
 
 # Step 3 - Wait until 09:00 IST if launched early, then start capture
 $RecorderProc = $null
+$captureFailed = $false
 $istHHMM = [int]((Get-ISTNow).ToString("HHmm"))
 
 if ($istHHMM -ge 1545) {
@@ -175,32 +191,51 @@ if ($istHHMM -ge 1545) {
 
     if (-not $RecorderProc) {
         Write-Error "ERROR: Failed to start master_recorder."
-        Stop-Process -Id $CollectorProc.Id -Force -ErrorAction SilentlyContinue
+        if ($StartedCollector -and $CollectorProc -and -not $CollectorProc.HasExited) {
+            Stop-Process -Id $CollectorProc.Id -Force -ErrorAction SilentlyContinue
+        }
         exit 1
     }
     Write-Host "[OK] Master recorder started with PID $($RecorderProc.Id)"
 
+    # Quick sanity check: if the recorder exits immediately, stop waiting loop now.
+    Start-Sleep -Seconds 5
+    if ($RecorderProc.HasExited) {
+        $captureFailed = $true
+        Write-Host "[ERROR] Master recorder exited immediately (code=$($RecorderProc.ExitCode))."
+        Write-Host "  -> Check recorder log: $RECORDER_OUT"
+    }
+
     # Step 4 - Hold until 15:45 IST
-    Write-Host "[4/7] Capture running. Auto-stop at 15:45 IST. Press Ctrl+C to abort early."
-    try {
-        while ([int]((Get-ISTNow).ToString("HHmm")) -lt 1545) {
-            $tickCounts = $null
-            try {
-                $tickResp = Invoke-WebRequest -UseBasicParsing "http://localhost:8080/ticks/count-today" -TimeoutSec 5
-                $tickCounts = $tickResp.Content | ConvertFrom-Json
-            } catch {
-                # Silently continue if count fails; capture is still running
+    if (-not $captureFailed) {
+        Write-Host "[4/7] Capture running. Auto-stop at 15:45 IST. Press Ctrl+C to abort early."
+        try {
+            while ([int]((Get-ISTNow).ToString("HHmm")) -lt 1545) {
+                if ($RecorderProc.HasExited) {
+                    $captureFailed = $true
+                    Write-Host "[ERROR] Master recorder exited early (code=$($RecorderProc.ExitCode))."
+                    Write-Host "  -> Check recorder log: $RECORDER_OUT"
+                    break
+                }
+
+                $tickCounts = $null
+                try {
+                    $tickResp = Invoke-WebRequest -UseBasicParsing "http://localhost:8080/ticks/count-today" -TimeoutSec 5
+                    $tickCounts = $tickResp.Content | ConvertFrom-Json
+                } catch {
+                    # Silently continue if count fails; capture may still be running
+                }
+
+                if ($tickCounts -and $tickCounts.status -eq "success") {
+                    Write-Host "  IST $((Get-ISTNow).ToString('HH:mm:ss')) - Fyers: $($tickCounts.fyers_ticks) | Upstox: $($tickCounts.upstox_ticks) | Total: $($tickCounts.total_ticks)"
+                } else {
+                    Write-Host "  IST $((Get-ISTNow).ToString('HH:mm:ss')) - capture active (tick count unavailable)"
+                }
+                Start-Sleep -Seconds 60
             }
-            
-            if ($tickCounts -and $tickCounts.status -eq "success") {
-                Write-Host "  IST $((Get-ISTNow).ToString('HH:mm:ss')) - Fyers: $($tickCounts.fyers_ticks) | Upstox: $($tickCounts.upstox_ticks) | Total: $($tickCounts.total_ticks)"
-            } else {
-                Write-Host "  IST $((Get-ISTNow).ToString('HH:mm:ss')) - capture active (tick count unavailable)"
-            }
-            Start-Sleep -Seconds 60
+        } catch {
+            Write-Host "[INFO] Capture loop exited: $_"
         }
-    } catch {
-        Write-Host "[INFO] Capture loop exited: $_"
     }
 
     # Step 5 - Stop capture
@@ -227,20 +262,28 @@ if ($istHHMM -ge 1545) {
     }
 }
 
-# Step 6 - Stop Data Collector
+# Step 6 - Stop Data Collector (only if this workflow started it)
 Write-Host ""
 Write-Host "[6/7] Stopping Data Collector..."
-if (-not $CollectorProc.HasExited) {
-    Stop-Process -Id $CollectorProc.Id -Force -ErrorAction SilentlyContinue
-    Write-Host "[OK] Data Collector stopped."
+if ($StartedCollector -and $CollectorProc) {
+    if (-not $CollectorProc.HasExited) {
+        Stop-Process -Id $CollectorProc.Id -Force -ErrorAction SilentlyContinue
+        Write-Host "[OK] Data Collector stopped."
+    } else {
+        Write-Host "[INFO] Data Collector had already exited."
+    }
 } else {
-    Write-Host "[INFO] Data Collector had already exited."
+    Write-Host "[INFO] Reused existing Data Collector; leaving it running."
 }
 
 # Step 7 - Post-market pipeline
 Write-Host ""
 Write-Host "[7/7] Post-market pipeline for $TRADE_DATE..."
 $pipelineFailed = $false
+if ($captureFailed) {
+    $pipelineFailed = $true
+    Write-Host "  [WARN] Capture failed early; see recorder log above."
+}
 
 Write-Host "  [7a] EOD live capture verification..."
 & $PYTHON_EXE "$LIB_DIR\verify_eod_live_capture.py" --date $TRADE_DATE

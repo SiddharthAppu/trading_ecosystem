@@ -8,6 +8,80 @@ Run this script at the root to start all core services in separate terminal wind
 .\start_platform.bat
 ```
 
+Show command help and all startup modes:
+```powershell
+.\start_platform.bat --help
+```
+
+Open services in a single Windows Terminal window with tabs (instead of separate CMD windows):
+```powershell
+.\start_platform.bat --wt
+# or combine with a mode
+.\start_platform.bat replay-studio --wt
+```
+
+### Startup Modes Explained
+
+1. `all` (default)
+```powershell
+.\start_platform.bat
+# or
+.\start_platform.bat all
+```
+What it starts: TimescaleDB + Data Collector + Replay Engine + Execution Engine + Historical UI + Forge UI.
+Best for: full local platform validation and end-to-end debugging.
+
+2. `collector`
+```powershell
+.\start_platform.bat collector
+```
+What it starts: TimescaleDB + Data Collector only.
+Best for: live market ingestion, auth checks, recorder workflows, and data API-only tasks.
+
+3. `replay`
+```powershell
+.\start_platform.bat replay
+```
+What it starts: TimescaleDB + Replay Engine only.
+Best for: replay backend testing without dashboards or live collector.
+
+4. `execution`
+```powershell
+.\start_platform.bat execution
+```
+What it starts: TimescaleDB + Execution Engine only.
+Best for: strategy orchestration debugging in isolation.
+
+5. `uis-only`
+```powershell
+.\start_platform.bat uis-only
+```
+What it starts: Historical UI + Forge UI only.
+Best for: frontend work when backend services are already running elsewhere.
+
+6. `collector+replay`
+```powershell
+.\start_platform.bat collector+replay
+```
+What it starts: TimescaleDB + Data Collector + Replay Engine.
+Best for: combined live capture and replay backend workflows.
+
+7. `replay-studio` (alias: `historical+replay`)
+```powershell
+.\start_platform.bat replay-studio
+```
+What it starts: TimescaleDB + Replay Engine + Historical UI.
+Best for: replay study sessions in Historical Dashboard while keeping live collector optional.
+
+8. `status`
+```powershell
+.\start_platform.bat status
+```
+What it shows: per-service running state, bound port, PID, process name, and executable path. Also reports TimescaleDB container health.
+Best for: quickly checking what is running before starting additional workflows or investigating port conflicts.
+
+Note: startup scripts skip duplicate launches if required ports are already occupied.
+
 ## 🏗️ Local Environment Setup
 
 ### 🔄 Configuration Sync

@@ -5,6 +5,19 @@ setlocal
 set "ROOT_DIR=%~dp0.."
 pushd "%ROOT_DIR%"
 
+set "PYTHON_CMD="
+where py >nul 2>&1
+if %ERRORLEVEL%==0 set "PYTHON_CMD=py -3"
+if not defined PYTHON_CMD (
+    where python >nul 2>&1
+    if %ERRORLEVEL%==0 set "PYTHON_CMD=python"
+)
+if not defined PYTHON_CMD (
+    echo [ERROR] Python not found in PATH. Install Python 3 or ensure 'py' or 'python' is available.
+    popd
+    exit /b 1
+)
+
 echo === 🚀 UNIFIED TRADING ECOSYSTEM MASTER SETUP ===
 
 :: 1. Sync Configuration
@@ -14,7 +27,7 @@ call scripts\sync_env.bat
 :: 2. Setup Shared Python Package
 echo [2/4] Initializing shared core package...
 pushd packages\trading_core
-python -m pip install -e .
+%PYTHON_CMD% -m pip install -e .
 popd
 
 :: 3. Setup Backend Services
@@ -23,15 +36,14 @@ for %%s in (%SERVICES%) do (
     echo [*] Setting up service: %%s...
     if not exist "services\%%s\.venv" (
         echo Creating virtual environment for %%s...
-        python -m venv services\%%s\.venv
+        %PYTHON_CMD% -m venv services\%%s\.venv
     )
     echo Installing dependencies for %%s...
-    :: Activate and install requirements plus the local core link
+    :: Install via service venv interpreter to avoid shell activation inconsistencies.
     pushd services\%%s
-    call .venv\Scripts\activate.bat
-    pip install -e ..\..\packages\trading_core
+    .venv\Scripts\python.exe -m pip install -e ..\..\packages\trading_core
     if exist "requirements.txt" (
-        pip install -r requirements.txt
+        .venv\Scripts\python.exe -m pip install -r requirements.txt
     )
     popd
 )

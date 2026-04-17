@@ -1,11 +1,34 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 set "ROOT_DIR=%~dp0"
 pushd "%ROOT_DIR%"
 
 set "PYTHONPATH=%ROOT_DIR%"
+set "USE_WT=0"
 set "MODE=%~1"
+
+if /I "%~1"=="--wt" (
+    set "USE_WT=1"
+    set "MODE=all"
+)
+if /I "%~2"=="--wt" (
+    set "USE_WT=1"
+)
+
 if "%MODE%"=="" set "MODE=all"
+
+if /I "%MODE%"=="--help" goto :print_usage
+if /I "%MODE%"=="-h" goto :print_usage
+if /I "%MODE%"=="/?" goto :print_usage
+if /I "%MODE%"=="status" goto :run_status
+
+if "%USE_WT%"=="1" (
+    where wt >nul 2>&1
+    if not %ERRORLEVEL%==0 (
+        echo [!] Windows Terminal not found. Falling back to separate CMD windows.
+        set "USE_WT=0"
+    )
+)
 
 if /I "%MODE%"=="all" goto :run_all
 if /I "%MODE%"=="collector" goto :run_collector
@@ -18,37 +41,121 @@ if /I "%MODE%"=="historical+replay" goto :run_replay_studio
 
 echo Invalid mode: %MODE%
 echo.
+goto :print_usage_error
+
+:print_usage
 echo Usage:
-echo   start_platform.bat [all^|collector^|replay^|execution^|uis-only^|collector+replay^|replay-studio]
+echo   start_platform.bat [all^|collector^|replay^|execution^|uis-only^|collector+replay^|replay-studio] [--wt]
+echo   start_platform.bat --wt
+echo.
+echo Modes:
+echo   all               - Start full stack: DB + collector + replay + execution + both UIs.
+echo   collector         - Start DB + data collector only.
+echo   replay            - Start DB + replay engine only.
+echo   execution         - Start DB + execution engine only.
+echo   uis-only          - Start historical dashboard + forge dashboard only.
+echo   collector+replay  - Start DB + data collector + replay engine.
+echo   replay-studio     - Start DB + replay engine + historical dashboard.
+echo   status            - Show running services, ports, PIDs and process names.
+echo.
+echo Notes:
+echo   historical+replay is supported as an alias of replay-studio.
+echo   If a port is already in use, duplicate service launch is skipped.
+echo   Use --wt to open services as tabs in one Windows Terminal window.
+echo.
+popd
+exit /b 0
+
+:print_usage_error
+echo Usage:
+echo   start_platform.bat [all^|collector^|replay^|execution^|uis-only^|collector+replay^|replay-studio^|status] [--wt]
+echo   start_platform.bat --wt
 echo.
 popd
 exit /b 1
 
 :start_collector
-start "DATA COLLECTOR" cmd /k "set ""PYTHONPATH=%ROOT_DIR%"" && call scripts\start_collector_service.bat"
-goto :eof
+call :is_port_listening 8080
+if %ERRORLEVEL%==0 (
+    echo [*] Data Collector already listening on port 8080. Skipping duplicate launch.
+    exit /b 0
+)
+call :launch_cmd "DATA COLLECTOR" "cd /d %ROOT_DIR%\services\data_collector && .\.venv\Scripts\python.exe main.py"
+exit /b 0
 
 :start_replay
-start "REPLAY ENGINE" cmd /k "call scripts\start_replay_service.bat"
-goto :eof
+call :is_port_listening 8765
+if %ERRORLEVEL%==0 (
+    echo [*] Replay Engine already listening on port 8765. Skipping duplicate launch.
+    exit /b 0
+)
+call :launch_cmd "REPLAY ENGINE" "cd /d %ROOT_DIR%\services\replay_engine && .\.venv\Scripts\python.exe main.py"
+exit /b 0
 
 :start_execution
-start "EXECUTION ENGINE" cmd /k "call scripts\start_execution_service.bat"
-goto :eof
+call :launch_cmd "EXECUTION ENGINE" "cd /d %ROOT_DIR%\services\execution_engine && .\.venv\Scripts\python.exe main.py"
+exit /b 0
 
 :start_historical_ui
-start "HISTORICAL UI" cmd /k "set PORT=3000 && pushd apps\historical_dashboard && npm run dev"
-goto :eof
+call :is_port_listening 3000
+if %ERRORLEVEL%==0 (
+    echo [*] Historical UI already listening on port 3000. Skipping duplicate launch.
+    exit /b 0
+)
+call :launch_cmd "HISTORICAL UI" "cd /d %ROOT_DIR%\apps\historical_dashboard && npm run dev"
+exit /b 0
 
 :start_forge_ui
-start "FORGE UI" cmd /k "set PORT=3001 && pushd apps\forge_dashboard && npm run dev"
+call :is_port_listening 3001
+if %ERRORLEVEL%==0 (
+    echo [*] Forge UI already listening on port 3001. Skipping duplicate launch.
+    exit /b 0
+)
+call :launch_cmd "FORGE UI" "cd /d %ROOT_DIR%\apps\forge_dashboard && npm run dev"
+exit /b 0
+
+:launch_cmd
+setlocal enabledelayedexpansion
+set "TITLE=%~1"
+set "CMD=%~2"
+
+if "%USE_WT%"=="1" (
+    wt -w 0 new-tab --title !TITLE! cmd /k "!CMD! && pause"
+) else (
+    start "!TITLE!" cmd /k "!CMD! && pause"
+)
+
+endlocal
 goto :eof
 
 :ensure_db
 echo [*] Checking Database Container (TimescaleDB)...
-docker-compose up -d
+docker-compose up -d timescaledb
+for /L %%I in (1,1,30) do (
+	for /f "delims=" %%S in ('docker inspect -f "{{.State.Health.Status}}" trading_timescaledb 2^>nul') do set "DB_HEALTH=%%S"
+	if /I "!DB_HEALTH!"=="healthy" (
+		echo [*] TimescaleDB is healthy.
+		echo.
+		goto :eof
+	)
+	if /I "!DB_HEALTH!"=="starting" (
+		echo [*] Waiting for TimescaleDB health... attempt %%I/30
+	) else (
+		if defined DB_HEALTH (
+			echo [*] TimescaleDB health is !DB_HEALTH!. Waiting... attempt %%I/30
+		) else (
+			echo [*] Waiting for TimescaleDB container details... attempt %%I/30
+		)
+	)
+	timeout /t 2 /nobreak >nul
+)
+echo [!] TimescaleDB did not report healthy within the expected time window.
 echo.
 goto :eof
+
+:is_port_listening
+powershell -NoProfile -Command "$port = %~1; if (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -gt 0) { exit 0 } else { exit 1 }"
+exit /b %ERRORLEVEL%
 
 :run_all
 
@@ -136,10 +243,13 @@ echo   UNIFIED TRADING PLATFORM - START REPLAY STUDIO
 echo ========================================
 echo.
 call :ensure_db
-call :start_collector
 call :start_replay
 call :start_historical_ui
-echo Launch complete: Historical UI + Data Collector + Replay Engine + DB
+echo Launch complete: Historical UI + Replay Engine + DB
+goto :done
+
+:run_status
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%\scripts\platform_status.ps1"
 goto :done
 
 :done
