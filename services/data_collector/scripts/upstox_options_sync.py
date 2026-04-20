@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import logging
 import math
+import random
 import sys
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -189,6 +190,14 @@ class UpstoxOptionsSync:
 
                 rows_written = await self._process_trade_day(trade_day, spot_open, active_expiries)
                 total_rows += rows_written
+                
+                # Small pause between days to avoid hitting rolling API limits
+                if trade_day != trading_days[-1][0]:
+                    await asyncio.sleep(1)
+                    
+            if not self.args.dry_run and total_rows > 0:
+                await self._inline_audit()
+                
         finally:
             await DatabaseManager.close_pool()
 
@@ -196,12 +205,28 @@ class UpstoxOptionsSync:
 
     async def _load_trading_days_with_spot(self, start_date: date, end_date: date) -> list[tuple[date, float]]:
         pool = await DatabaseManager.get_pool()
+        
+        # We prefer Upstox spot but fallback to Fyers for older data (pre-2023)
         query = """
-            SELECT time::date AS trade_day, open
-            FROM broker_upstox.ohlcv_1m
-            WHERE symbol = $1
-              AND time::date BETWEEN $2 AND $3
-              AND time::time = $4::time
+            WITH spot_data AS (
+                SELECT time::date AS trade_day, open, 'upstox' as src
+                FROM broker_upstox.ohlcv_1m
+                WHERE symbol = $1
+                  AND time::date BETWEEN $2 AND $3
+                  AND time::time = $4::time
+                UNION ALL
+                SELECT time::date AS trade_day, open, 'fyers' as src
+                FROM broker_fyers.ohlcv_1m
+                WHERE symbol = $1
+                  AND time::date BETWEEN $2 AND $3
+                  AND time::time = $4::time
+                  AND NOT EXISTS (
+                      SELECT 1 FROM broker_upstox.ohlcv_1m u 
+                      WHERE u.symbol = $1 AND u.time::date = broker_fyers.ohlcv_1m.time::date
+                  )
+            )
+            SELECT trade_day, open, src
+            FROM spot_data
             ORDER BY trade_day
         """
         async with pool.acquire() as connection:
@@ -212,7 +237,14 @@ class UpstoxOptionsSync:
                 end_date,
                 MARKET_OPEN_TIME,
             )
-        return [(record["trade_day"], float(record["open"])) for record in records]
+        
+        results = []
+        for r in records:
+            results.append((r["trade_day"], float(r["open"])))
+            if r["src"] == "fyers":
+                logger.debug("Using Fyers spot fallback for date: %s", r["trade_day"])
+                
+        return results
 
     async def _process_trade_day(self, trade_day: date, spot_open: float, active_expiries: list[date]) -> int:
         atm_strike = round_to_strike(spot_open)
@@ -254,12 +286,21 @@ class UpstoxOptionsSync:
             logger.info("Dry run: resolved %s symbols for %s", len(selected_contracts), trade_day)
             return 0
 
+        # Smart Skipping Logic
+        missing_contracts = await self._filter_existing_contracts(trade_day, selected_contracts)
+        skipped = len(selected_contracts) - len(missing_contracts)
+        if skipped > 0:
+            logger.info("Smart Skip: %s contracts already in DB. Downloading %s missing.", skipped, len(missing_contracts))
+
+        if not missing_contracts:
+            return 0
+
         download_results = await self.fetcher.download_historical_candles_batch(
-            [contract["instrument_key"] for contract in selected_contracts],
+            [contract["instrument_key"] for contract in missing_contracts],
             trade_day.isoformat(),
             trade_day.isoformat(),
         )
-        rows = self._build_upsert_rows(download_results, selected_contracts)
+        rows = self._build_upsert_rows(download_results, missing_contracts)
         if not rows:
             logger.warning("No candle rows returned for %s", trade_day)
             return 0
@@ -315,12 +356,12 @@ class UpstoxOptionsSync:
         self,
         download_results: list[dict[str, object]],
         contracts: list[dict[str, str]],
-    ) -> list[tuple[datetime, str, float, float, float, float, int, None, None]]:
+    ) -> list[tuple[datetime, str, float, float, float, float, int, int, float | None, float | None, str]]:
         symbol_lookup = {
             contract["instrument_key"]: contract["symbol"]
             for contract in contracts
         }
-        rows: list[tuple[datetime, str, float, float, float, float, int, None, None]] = []
+        rows: list[tuple[datetime, str, float, float, float, float, int, int, float | None, float | None, str]] = []
 
         for result in download_results:
             instrument_key = str(result.get("instrument_key", ""))
@@ -335,6 +376,11 @@ class UpstoxOptionsSync:
             for candle in candles:
                 if len(candle) < 6:
                     continue
+                
+                # Upstox expired candles: [timestamp, open, high, low, close, volume, oi]
+                # Index 6 is OI. Some older candles might only have 6 elements.
+                oi = int(math.floor(float(candle[6]))) if len(candle) > 6 else 0
+
                 rows.append(
                     (
                         extract_timestamp(candle[0]),
@@ -344,13 +390,19 @@ class UpstoxOptionsSync:
                         float(candle[3]),
                         float(candle[4]),
                         int(math.floor(float(candle[5]))),
+                        oi,
                         None,
                         None,
+                        instrument_key,
                     )
                 )
+        
+        if not rows and download_results:
+            logger.debug("Parsing complete: 0 rows generated from %d download results", len(download_results))
+            
         return rows
 
-    async def _upsert_rows(self, rows: list[tuple[datetime, str, float, float, float, float, int, None, None]]) -> None:
+    async def _upsert_rows(self, rows: list[tuple[datetime, str, float, float, float, float, int, int, float | None, float | None, str]]) -> None:
         pool = await DatabaseManager.get_pool()
         query = """
             INSERT INTO broker_upstox.options_ohlc (
@@ -361,22 +413,83 @@ class UpstoxOptionsSync:
                 low,
                 close,
                 volume,
+                oi,
                 calc_implied_volatility,
-                calc_delta
+                calc_delta,
+                instrument_key
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (time, symbol) DO UPDATE SET
                 open = EXCLUDED.open,
                 high = EXCLUDED.high,
                 low = EXCLUDED.low,
                 close = EXCLUDED.close,
                 volume = EXCLUDED.volume,
+                oi = EXCLUDED.oi,
                 calc_implied_volatility = EXCLUDED.calc_implied_volatility,
-                calc_delta = EXCLUDED.calc_delta
+                calc_delta = EXCLUDED.calc_delta,
+                instrument_key = EXCLUDED.instrument_key
         """
         async with pool.acquire() as connection:
             for batch in chunked(rows, UPSERT_BATCH_SIZE):
                 await connection.executemany(query, batch)
+
+    async def _filter_existing_contracts(self, trade_day: date, contracts: list[dict[str, str]]) -> list[dict[str, str]]:
+        if not contracts:
+            return []
+            
+        pool = await DatabaseManager.get_pool()
+        symbols = [c["symbol"] for c in contracts]
+        
+        # Consider a contract "downloaded" if it has >300 candles for the day (handles normal sessions)
+        query = """
+            SELECT symbol
+            FROM broker_upstox.options_ohlc
+            WHERE time::date = $1 AND symbol = ANY($2)
+            GROUP BY symbol
+            HAVING COUNT(*) > 300
+        """
+        async with pool.acquire() as connection:
+            records = await connection.fetch(query, trade_day, symbols)
+            existing_symbols = {r["symbol"] for r in records}
+            
+        return [c for c in contracts if c["symbol"] not in existing_symbols]
+
+    async def _inline_audit(self):
+        pool = await DatabaseManager.get_pool()
+        query = """
+            SELECT * FROM (
+                SELECT DISTINCT time::date as trade_date, symbol, instrument_key
+                FROM broker_upstox.options_ohlc
+                WHERE instrument_key IS NOT NULL
+            ) sub
+            ORDER BY random()
+            LIMIT 3
+        """
+        async with pool.acquire() as connection:
+            records = await connection.fetch(query)
+            
+        if not records:
+            return
+            
+        logger.info("--- Performing Inline Audit on 3 Random Contracts ---")
+        for r in records:
+            trade_date = r["trade_date"]
+            symbol = r["symbol"]
+            instrument_key = r["instrument_key"]
+            
+            db_query = "SELECT COUNT(*) FROM broker_upstox.options_ohlc WHERE symbol = $1 AND time::date = $2"
+            async with pool.acquire() as conn:
+                db_count = await conn.fetchval(db_query, symbol, trade_date)
+                
+            results = await self.fetcher.download_historical_candles_batch([instrument_key], trade_date.isoformat(), trade_date.isoformat())
+            api_count = len(results[0].get("candles", [])) if results and isinstance(results[0], dict) else 0
+            
+            if db_count == api_count:
+                logger.info("✅ AUDIT MATCH: %s on %s has %s rows (DB) == %s rows (API)", symbol, trade_date, db_count, api_count)
+            else:
+                logger.error("❌ AUDIT MISMATCH: %s on %s has %s rows (DB) vs %s rows (API)", symbol, trade_date, db_count, api_count)
+            await asyncio.sleep(1)
 
 
 async def async_main() -> None:

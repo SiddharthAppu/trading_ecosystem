@@ -49,8 +49,12 @@ def _parse_datetime_input(value: str, field_name: str, end_of_day: bool = False)
 
 
 def _gap_filter_sql_for_table(table_name: str) -> str:
-    # For 1m historical candles, ignore overnight/weekend boundaries when counting gaps.
-    if table_name == "ohlcv_1m":
+    # For periodic data (1m candles/greeks), ignore overnight/weekend boundaries when counting gaps.
+    # We only care about gaps WITHIN a single trading day (09:15 - 15:30).
+    # Multi-day gaps usually indicate missing download days or illiquid strikes,
+    # but the overnight period (3:30 PM - 9:15 AM) should never be counted as "missing minutes".
+    periodic_indicators = ("_1m", "1min", "_ohlc", "greeks")
+    if any(ind in table_name.lower() for ind in periodic_indicators):
         return """
           AND time::date = prev_time::date
           AND EXTRACT(ISODOW FROM time) BETWEEN 1 AND 5

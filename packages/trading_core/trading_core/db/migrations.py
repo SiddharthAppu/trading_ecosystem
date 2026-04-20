@@ -116,6 +116,7 @@ class MigrationManager:
         low DOUBLE PRECISION,
         close DOUBLE PRECISION,
         volume BIGINT,
+        oi BIGINT,
         calc_implied_volatility DOUBLE PRECISION,
         calc_delta DOUBLE PRECISION,
         UNIQUE(time, symbol)
