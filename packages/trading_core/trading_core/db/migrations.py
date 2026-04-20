@@ -24,7 +24,7 @@ class MigrationManager:
         ask DOUBLE PRECISION,
         UNIQUE(time, symbol)
     );
-    SELECT create_hypertable('broker_fyers.market_ticks', 'time', if_not_exists => TRUE);
+    SELECT create_hypertable('broker_fyers.market_ticks', 'time', if_not_exists => TRUE, migrate_data => TRUE);
 
     CREATE TABLE IF NOT EXISTS broker_upstox.market_ticks (
         time TIMESTAMPTZ NOT NULL,
@@ -35,7 +35,7 @@ class MigrationManager:
         ask DOUBLE PRECISION,
         UNIQUE(time, symbol)
     );
-    SELECT create_hypertable('broker_upstox.market_ticks', 'time', if_not_exists => TRUE);
+    SELECT create_hypertable('broker_upstox.market_ticks', 'time', if_not_exists => TRUE, migrate_data => TRUE);
 
     -- 1m OHLCV Table (Hypertable)
     CREATE TABLE IF NOT EXISTS broker_fyers.ohlcv_1m (
@@ -48,7 +48,7 @@ class MigrationManager:
         volume BIGINT,
         UNIQUE(time, symbol)
     );
-    SELECT create_hypertable('broker_fyers.ohlcv_1m', 'time', if_not_exists => TRUE);
+    SELECT create_hypertable('broker_fyers.ohlcv_1m', 'time', if_not_exists => TRUE, migrate_data => TRUE);
 
     CREATE TABLE IF NOT EXISTS broker_upstox.ohlcv_1m (
         time TIMESTAMPTZ NOT NULL,
@@ -60,7 +60,7 @@ class MigrationManager:
         volume BIGINT,
         UNIQUE(time, symbol)
     );
-    SELECT create_hypertable('broker_upstox.ohlcv_1m', 'time', if_not_exists => TRUE);
+    SELECT create_hypertable('broker_upstox.ohlcv_1m', 'time', if_not_exists => TRUE, migrate_data => TRUE);
 
     -- Derived 1m OHLCV from Ticks (Hypertable with lineage)
     CREATE TABLE IF NOT EXISTS broker_fyers.ohlcv_1min_from_ticks (
@@ -76,7 +76,7 @@ class MigrationManager:
         aggregation_run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(time, symbol)
     );
-    SELECT create_hypertable('broker_fyers.ohlcv_1min_from_ticks', 'time', if_not_exists => TRUE);
+    SELECT create_hypertable('broker_fyers.ohlcv_1min_from_ticks', 'time', if_not_exists => TRUE, migrate_data => TRUE);
 
     CREATE TABLE IF NOT EXISTS broker_upstox.ohlcv_1min_from_ticks (
         time TIMESTAMPTZ NOT NULL,
@@ -91,7 +91,7 @@ class MigrationManager:
         aggregation_run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(time, symbol)
     );
-    SELECT create_hypertable('broker_upstox.ohlcv_1min_from_ticks', 'time', if_not_exists => TRUE);
+    SELECT create_hypertable('broker_upstox.ohlcv_1min_from_ticks', 'time', if_not_exists => TRUE, migrate_data => TRUE);
 
     -- Options OHLC Table (Hypertable)
     CREATE TABLE IF NOT EXISTS broker_fyers.options_ohlc (
@@ -106,7 +106,7 @@ class MigrationManager:
         calc_delta DOUBLE PRECISION,
         UNIQUE(time, symbol)
     );
-    SELECT create_hypertable('broker_fyers.options_ohlc', 'time', if_not_exists => TRUE);
+    SELECT create_hypertable('broker_fyers.options_ohlc', 'time', if_not_exists => TRUE, migrate_data => TRUE);
 
     CREATE TABLE IF NOT EXISTS broker_upstox.options_ohlc (
         time TIMESTAMPTZ NOT NULL,
@@ -121,7 +121,7 @@ class MigrationManager:
         calc_delta DOUBLE PRECISION,
         UNIQUE(time, symbol)
     );
-    SELECT create_hypertable('broker_upstox.options_ohlc', 'time', if_not_exists => TRUE);
+    SELECT create_hypertable('broker_upstox.options_ohlc', 'time', if_not_exists => TRUE, migrate_data => TRUE);
 
     -- Live Options Greeks Table (Hypertable)
     CREATE TABLE IF NOT EXISTS broker_fyers.options_greeks_live (
@@ -134,7 +134,7 @@ class MigrationManager:
         iv DOUBLE PRECISION,
         UNIQUE(time, symbol)
     );
-    SELECT create_hypertable('broker_fyers.options_greeks_live', 'time', if_not_exists => TRUE);
+    SELECT create_hypertable('broker_fyers.options_greeks_live', 'time', if_not_exists => TRUE, migrate_data => TRUE);
 
     CREATE TABLE IF NOT EXISTS broker_upstox.options_greeks_live (
         time TIMESTAMPTZ NOT NULL,
@@ -146,7 +146,7 @@ class MigrationManager:
         iv DOUBLE PRECISION,
         UNIQUE(time, symbol)
     );
-    SELECT create_hypertable('broker_upstox.options_greeks_live', 'time', if_not_exists => TRUE);
+    SELECT create_hypertable('broker_upstox.options_greeks_live', 'time', if_not_exists => TRUE, migrate_data => TRUE);
 
 
     -- Options Greeks Table (Hypertable)
@@ -164,7 +164,7 @@ class MigrationManager:
         vega DOUBLE PRECISION,
         rho DOUBLE PRECISION
     );
-    SELECT create_hypertable('analytics.options_greeks', 'time', if_not_exists => TRUE);
+    SELECT create_hypertable('analytics.options_greeks', 'time', if_not_exists => TRUE, migrate_data => TRUE);
 
     CREATE TABLE IF NOT EXISTS analytics.options_greeks_master (
         provider TEXT NOT NULL,
@@ -177,7 +177,7 @@ class MigrationManager:
         iv DOUBLE PRECISION,
         UNIQUE(provider, time, symbol)
     );
-    SELECT create_hypertable('analytics.options_greeks_master', 'time', if_not_exists => TRUE);
+    SELECT create_hypertable('analytics.options_greeks_master', 'time', if_not_exists => TRUE, migrate_data => TRUE);
     """
 
     @classmethod
