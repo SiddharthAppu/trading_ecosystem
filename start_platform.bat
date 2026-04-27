@@ -35,7 +35,6 @@ if "%USE_WT%"=="1" (
 if /I "%MODE%"=="all" goto :run_all
 if /I "%MODE%"=="collector" goto :run_collector
 if /I "%MODE%"=="replay" goto :run_replay
-if /I "%MODE%"=="execution" goto :run_execution
 if /I "%MODE%"=="uis-only" goto :run_uis_only
 if /I "%MODE%"=="collector+replay" goto :run_collector_replay
 if /I "%MODE%"=="replay-studio" goto :run_replay_studio
@@ -47,14 +46,13 @@ goto :print_usage_error
 
 :print_usage
 echo Usage:
-echo   start_platform.bat [all^|collector^|replay^|execution^|uis-only^|collector+replay^|replay-studio] [--wt]
+echo   start_platform.bat [all^|collector^|replay^|uis-only^|collector+replay^|replay-studio] [--wt]
 echo   start_platform.bat --wt
 echo.
 echo Modes:
 echo   all               - Start full stack: DB + collector + replay + execution + both UIs.
 echo   collector         - Start DB + data collector only.
 echo   replay            - Start DB + replay engine only.
-echo   execution         - Start DB + execution engine only.
 echo   uis-only          - Start historical dashboard + forge dashboard only.
 echo   collector+replay  - Start DB + data collector + replay engine.
 echo   replay-studio     - Start DB + data collector + replay engine + historical dashboard.
@@ -70,7 +68,7 @@ exit /b 0
 
 :print_usage_error
 echo Usage:
-echo   start_platform.bat [all^|collector^|replay^|execution^|uis-only^|collector+replay^|replay-studio^|status] [--wt]
+echo   start_platform.bat [all^|collector^|replay^|uis-only^|collector+replay^|replay-studio^|status] [--wt]
 echo   start_platform.bat --wt
 echo.
 popd
@@ -94,9 +92,6 @@ if %ERRORLEVEL%==0 (
 call :launch_cmd "REPLAY ENGINE" "cd /d %ROOT_DIR%\services\replay_engine && .\.venv\Scripts\python.exe main.py"
 exit /b 0
 
-:start_execution
-call :launch_cmd "EXECUTION ENGINE" "cd /d %ROOT_DIR%\services\execution_engine && .\.venv\Scripts\python.exe main.py"
-exit /b 0
 
 :start_historical_ui
 call :is_port_listening 3000
@@ -171,7 +166,6 @@ call :ensure_db
 :: 1. Start APIs and Backend Services
 call :start_collector
 call :start_replay
-call :start_execution
 
 :: 2. Start Dashboards (Explicit Ports)
 call :start_historical_ui
@@ -208,54 +202,3 @@ call :start_replay
 echo Launch complete: Replay Engine + DB
 goto :done
 
-:run_execution
-echo ========================================
-echo   UNIFIED TRADING PLATFORM - START EXECUTION
-echo ========================================
-echo.
-call :ensure_db
-call :start_execution
-echo Launch complete: Execution Engine + DB
-goto :done
-
-:run_uis_only
-echo ========================================
-echo   UNIFIED TRADING PLATFORM - START UIs ONLY
-echo ========================================
-echo.
-call :start_historical_ui
-call :start_forge_ui
-echo Launch complete: Historical UI + Forge UI
-goto :done
-
-:run_collector_replay
-echo ========================================
-echo   UNIFIED TRADING PLATFORM - START COLLECTOR+REPLAY
-echo ========================================
-echo.
-call :ensure_db
-call :start_collector
-call :start_replay
-echo Launch complete: Data Collector + Replay Engine + DB
-goto :done
-
-:run_replay_studio
-echo ========================================
-echo   UNIFIED TRADING PLATFORM - START REPLAY STUDIO
-echo ========================================
-echo.
-call :ensure_db
-call :start_collector
-call :start_replay
-call :start_historical_ui
-echo Launch complete: Historical UI + Data Collector + Replay Engine + DB
-goto :done
-
-:run_status
-powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%\scripts\platform_status.ps1"
-goto :done
-
-:done
-
-popd
-pause

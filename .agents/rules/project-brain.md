@@ -31,9 +31,16 @@ This file serves as the permanent brain of the `trading_ecosystem` monorepo. It 
 ## 🔌 Service Runtimes & Singletons (Data Collector API)
 - The Data Collector backend boots into memory via `start_platform.bat`.
 - **Hot-Reloading Rule**: By default, `FyersAdapter` and `UpstoxAdapter` bind access tokens as continuous memory singletons. To prevent desync with external scripts (`verify_auth.py`), `validate_token()` explicitly runs `self._load_token()` to securely "hot-reload" updated keys dynamically from disk.
+- **Replay Engine Constraint**: The Replay Engine (`services/replay_engine`) must remain strictly a raw data pump. It delegates time aggregation to TimescaleDB's SQL `time_bucket()` and MUST NOT perform standard indicator calculations (RSI, MACD) or heavy quantitative processing. Such calculations belong in `trading_core/analytics` or the client UI.
 
 ## 📊 Analytics & Diagnostics
 - **Gap Detection Logic**: When calculating data gaps in periodic tables (OHLC, Greeks), we strictly filter for intra-day events (`time::date = prev_time::date`). This prevents the diagnostic dashboard from reporting the expected overnight gap (3:30 PM - 9:15 AM) as "Missing Minutes".
+
+## 🛠️ Operational Resilience & Startup
+- **Database Dependency**: The Data Collector service (`services/data_collector`) rigidly depends on a healthy TimescaleDB connection. In events of system restarts or power shutdowns, the Docker container may take 60-120s to reach a 'Healthy' status. 
+- **Failure Mode**: If the Collector starts before the DB is ready, it will fatally crash with a `ConnectionError`. 
+- **Orchestration Rule**: The `run_daily_capture_eod_workflow.ps1` script is designed to detect this. If you see `[WARN] Port 8080 not responding yet`, ensure Docker is running and the `trading_timescaledb` container is healthy before restarting the workflow.
+- **Token Persistence**: Tokens refreshed during a failed run ARE saved to `config/auth/` and will be automatically picked up by the next successful service start.
 
 ---
 *(Auto-updated sequentially by the Agent to enforce continuity)*

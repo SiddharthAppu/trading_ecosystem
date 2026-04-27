@@ -5,193 +5,6 @@ from aiohttp import web
 from trading_core.db import DatabaseManager
 
 
-SUPPORTED_INDICATORS = {
-    "ema_20",
-    "sma_20",
-    "rsi_14",
-    "macd",
-}
-
-# Align aggregated bars (5m/10m) to market open: 09:15 IST = 03:45 UTC.
-MARKET_BUCKET_ORIGIN_UTC = "2000-01-01 03:45:00+00"
-
-
-def _parse_indicators(raw_indicators) -> list[str]:
-    if raw_indicators is None:
-        return []
-    if isinstance(raw_indicators, str):
-        tokens = [t.strip().lower() for t in raw_indicators.split(",") if t.strip()]
-    elif isinstance(raw_indicators, list):
-        tokens = [str(t).strip().lower() for t in raw_indicators if str(t).strip()]
-    else:
-        raise ValueError("Indicators must be a comma-separated string or string array")
-
-    deduped = []
-    seen = set()
-    for token in tokens:
-        if token not in seen:
-            deduped.append(token)
-            seen.add(token)
-
-    unsupported = [t for t in deduped if t not in SUPPORTED_INDICATORS]
-    if unsupported:
-        raise ValueError(
-            "Unsupported indicators: " + ", ".join(unsupported) +
-            ". Supported: " + ", ".join(sorted(SUPPORTED_INDICATORS))
-        )
-
-    return deduped
-
-
-def _supports_indicators(data_type: str) -> bool:
-    return data_type in ("ohlcv_1m", "ohlcv_1min_from_ticks", "options_ohlc")
-
-
-def _to_float(value):
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _calc_sma(values: list[float | None], period: int) -> list[float | None]:
-    output: list[float | None] = [None] * len(values)
-    for idx in range(len(values)):
-        if idx < period - 1:
-            continue
-        window = values[idx - period + 1: idx + 1]
-        if any(v is None for v in window):
-            continue
-        output[idx] = sum(window) / period
-    return output
-
-
-def _calc_ema(values: list[float | None], period: int) -> list[float | None]:
-    output: list[float | None] = [None] * len(values)
-    if len(values) < period:
-        return output
-
-    alpha = 2 / (period + 1)
-
-    seed_start = None
-    for idx in range(0, len(values) - period + 1):
-        window = values[idx:idx + period]
-        if all(v is not None for v in window):
-            seed_start = idx
-            break
-
-    if seed_start is None:
-        return output
-
-    seed_window = values[seed_start:seed_start + period]
-    ema_prev = sum(seed_window) / period
-    seed_idx = seed_start + period - 1
-    output[seed_idx] = ema_prev
-
-    for idx in range(seed_idx + 1, len(values)):
-        value = values[idx]
-        if value is None:
-            output[idx] = None
-            continue
-        ema_prev = (value * alpha) + (ema_prev * (1 - alpha))
-        output[idx] = ema_prev
-
-    return output
-
-
-def _calc_rsi(values: list[float | None], period: int) -> list[float | None]:
-    output: list[float | None] = [None] * len(values)
-    if len(values) <= period:
-        return output
-
-    deltas: list[float | None] = [None]
-    for idx in range(1, len(values)):
-        prev_value = values[idx - 1]
-        curr_value = values[idx]
-        if prev_value is None or curr_value is None:
-            deltas.append(None)
-        else:
-            deltas.append(curr_value - prev_value)
-
-    seed = deltas[1:period + 1]
-    if any(delta is None for delta in seed):
-        return output
-
-    gains = [max(delta, 0) for delta in seed if delta is not None]
-    losses = [abs(min(delta, 0)) for delta in seed if delta is not None]
-
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-
-    if avg_loss == 0:
-        output[period] = 100.0
-    else:
-        rs = avg_gain / avg_loss
-        output[period] = 100 - (100 / (1 + rs))
-
-    for idx in range(period + 1, len(values)):
-        delta = deltas[idx]
-        if delta is None:
-            output[idx] = None
-            continue
-
-        gain = max(delta, 0)
-        loss = abs(min(delta, 0))
-        avg_gain = ((avg_gain * (period - 1)) + gain) / period
-        avg_loss = ((avg_loss * (period - 1)) + loss) / period
-
-        if avg_loss == 0:
-            output[idx] = 100.0
-        else:
-            rs = avg_gain / avg_loss
-            output[idx] = 100 - (100 / (1 + rs))
-
-    return output
-
-
-def _compute_indicators(rows: list[dict], indicators: list[str]) -> None:
-    if not rows or not indicators:
-        return
-
-    closes = [_to_float(row.get("close")) for row in rows]
-
-    ema20 = _calc_ema(closes, 20) if "ema_20" in indicators else None
-    sma20 = _calc_sma(closes, 20) if "sma_20" in indicators else None
-    rsi14 = _calc_rsi(closes, 14) if "rsi_14" in indicators else None
-
-    macd_line = None
-    macd_signal = None
-    macd_histogram = None
-    if "macd" in indicators:
-        ema12 = _calc_ema(closes, 12)
-        ema26 = _calc_ema(closes, 26)
-        macd_line = []
-        for idx in range(len(closes)):
-            if ema12[idx] is None or ema26[idx] is None:
-                macd_line.append(None)
-            else:
-                macd_line.append(ema12[idx] - ema26[idx])
-        macd_signal = _calc_ema(macd_line, 9)
-        macd_histogram = []
-        for idx in range(len(closes)):
-            if macd_line[idx] is None or macd_signal[idx] is None:
-                macd_histogram.append(None)
-            else:
-                macd_histogram.append(macd_line[idx] - macd_signal[idx])
-
-    for idx, row in enumerate(rows):
-        if ema20 is not None:
-            row["ema_20"] = ema20[idx]
-        if sma20 is not None:
-            row["sma_20"] = sma20[idx]
-        if rsi14 is not None:
-            row["rsi_14"] = rsi14[idx]
-        if macd_line is not None:
-            row["macd_line"] = macd_line[idx]
-            row["macd_signal"] = macd_signal[idx]
-            row["macd_histogram"] = macd_histogram[idx]
 
 # Replay Server logic ported to the unified service structure
 # Uses the DatabaseManager for connection pooling
@@ -240,14 +53,6 @@ def _supports_timeframe_aggregation(data_type: str) -> bool:
     return data_type in ("ohlcv_1m", "ohlcv_1min_from_ticks")
 
 
-def _parse_query_indicators(raw_values: list[str]) -> list[str]:
-    if not raw_values:
-        return []
-
-    if len(raw_values) == 1 and "," in raw_values[0]:
-        return _parse_indicators(raw_values[0])
-
-    return _parse_indicators(raw_values)
 
 
 def _cors_headers() -> dict[str, str]:
@@ -268,7 +73,6 @@ async def fetch_historical_series(
     start_time: str = None,
     end_time: str = None,
     timeframe: str = "1m",
-    indicators: list[str] | None = None,
 ):
     """
     Fetch historical data from database.
@@ -344,8 +148,6 @@ async def fetch_historical_series(
         records = await conn.fetch(query, *params)
         rows = [dict(r) for r in records]
 
-    if indicators:
-        _compute_indicators(rows, indicators)
 
     return rows
 
@@ -361,7 +163,6 @@ async def replay_handler(websocket):
         data_type = config.get("data_type", "options_ohlc")  # market_ticks, ohlcv_1m, ohlcv_1min_from_ticks, options_ohlc
         speed = config.get("speed", 1.0)
         timeframe = config.get("timeframe", "1m")
-        indicators = config.get("indicators", [])
         start_time = config.get("start_time")  # ISO format: "2025-01-01T09:15:00Z"
         end_time = config.get("end_time")      # ISO format: "2025-01-31T15:30:00Z"
         
@@ -373,12 +174,6 @@ async def replay_handler(websocket):
         try:
             get_table_name(data_type, provider)
             _parse_timeframe(timeframe)
-            parsed_indicators = _parse_indicators(indicators)
-            if parsed_indicators and not _supports_indicators(data_type):
-                raise ValueError(
-                    f"Indicators are not supported for data_type={data_type}. "
-                    "Use ohlcv_1m, ohlcv_1min_from_ticks, or options_ohlc."
-                )
         except ValueError as e:
             await websocket.send(json.dumps({"error": str(e)}))
             return
@@ -399,7 +194,6 @@ async def replay_handler(websocket):
                 start_time,
                 end_time,
                 timeframe,
-                parsed_indicators,
             )
         except Exception as e:
             await websocket.send(json.dumps({"error": f"Database error: {str(e)}"}))
@@ -416,7 +210,6 @@ async def replay_handler(websocket):
             "data_type": data_type,
             "timeframe": timeframe,
             "source_table": source_table,
-            "indicators": parsed_indicators,
             "record_count": len(data),
             "speed": speed
         }))
@@ -453,7 +246,6 @@ async def load_replay_handler(request: web.Request) -> web.Response:
     timeframe = (query.get("timeframe") or "1m").strip().lower()
     start_time = (query.get("start_time") or "").strip() or None
     end_time = (query.get("end_time") or "").strip() or None
-    indicators_raw = query.getall("indicators", [])
 
     if not symbol:
         return _json_cors({"error": "symbol is required"}, status=400)
@@ -461,12 +253,6 @@ async def load_replay_handler(request: web.Request) -> web.Response:
     try:
         get_table_name(data_type, provider)
         _parse_timeframe(timeframe)
-        parsed_indicators = _parse_query_indicators(indicators_raw)
-        if parsed_indicators and not _supports_indicators(data_type):
-            raise ValueError(
-                f"Indicators are not supported for data_type={data_type}. "
-                "Use ohlcv_1m, ohlcv_1min_from_ticks, or options_ohlc."
-            )
     except ValueError as e:
         return _json_cors({"error": str(e)}, status=400)
 
@@ -478,7 +264,6 @@ async def load_replay_handler(request: web.Request) -> web.Response:
             start_time=start_time,
             end_time=end_time,
             timeframe=timeframe,
-            indicators=parsed_indicators,
         )
     except Exception as e:
         return _json_cors({"error": f"Database error: {str(e)}"}, status=500)
@@ -492,7 +277,6 @@ async def load_replay_handler(request: web.Request) -> web.Response:
         "provider": provider,
         "data_type": data_type,
         "timeframe": timeframe,
-        "indicators": parsed_indicators,
         "record_count": len(rows),
         "records": rows,
     })
