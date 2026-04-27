@@ -297,7 +297,11 @@ Write-Host "  [7c] Tick aggregation (Fyers + Upstox)..."
 & "$ROOT\scripts\run_eod_tick_aggregation.bat" --date $TRADE_DATE
 if ($LASTEXITCODE -ne 0) { $pipelineFailed = $true; Write-Host "  [WARN] Tick aggregation reported failures." }
 
-Write-Host "  [7d] DB backup..."
+Write-Host "  [7d] Options Sync to Master (Enrichment)..."
+& $PYTHON_EXE "$LIB_DIR\sync_options_to_master.py" --date $TRADE_DATE
+if ($LASTEXITCODE -ne 0) { $pipelineFailed = $true; Write-Host "  [WARN] Options sync reported failures." }
+
+Write-Host "  [7e] DB backup..."
 & $PYTHON_EXE "$LIB_DIR\db_backup.py"
 if ($LASTEXITCODE -ne 0) { $pipelineFailed = $true; Write-Host "  [WARN] DB backup reported failures." }
 
