@@ -34,9 +34,35 @@ class TelegramNotifier(BaseNotifier):
         self.bot_token = bot_token
         self.chat_id = chat_id
 
+    def _get_emoji(self, level: str) -> str:
+        mapping = {
+            "critical": "🛑",
+            "error": "🚨",
+            "warning": "⚠️",
+            "info": "📝",
+            "success": "✅",
+            "heartbeat": "📊"
+        }
+        return mapping.get(level.lower(), "🔹")
+
     async def send(self, message: NotificationMessage) -> None:
-        text = f"{message.title}\n{message.body}"
-        payload = parse.urlencode({"chat_id": self.chat_id, "text": text}).encode("utf-8")
+        emoji = self._get_emoji(message.level)
+        title = message.title.upper()
+        
+        text = (
+            f"{emoji} <b>{title}</b>\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"{message.body}\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"<i>🚀 Astra Trading Executor</i>"
+        )
+        
+        payload = parse.urlencode({
+            "chat_id": self.chat_id, 
+            "text": text,
+            "parse_mode": "HTML"
+        }).encode("utf-8")
+        
         endpoint = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         req = request.Request(endpoint, data=payload, method="POST")
         try:

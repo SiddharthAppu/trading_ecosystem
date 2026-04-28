@@ -16,6 +16,39 @@ from trading_core.providers.upstox_adapter import UPSTOX_UNDERLYING_KEYS
 
 logger = logging.getLogger(__name__)
 
+class TickFileLogger:
+    """Handles high-frequency tick logging to flat files."""
+    def __init__(self, base_dir: str = "logs/ticks"):
+        self.base_dir = Path(base_dir)
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self._locks = {}
+
+    def _get_file_path(self, symbol: str):
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        clean_symbol = symbol.replace(":", "_").replace("-", "_")
+        return self.base_dir / f"{clean_symbol}_{date_str}.csv"
+
+    def log_ticks(self, rows: List[Any]):
+        """Rows: (ts, symbol, price, volume, oi, delta, theta, bid, ask)"""
+        grouped = {}
+        for row in rows:
+            symbol = row[1]
+            grouped.setdefault(symbol, []).append(row)
+
+        for symbol, ticks in grouped.items():
+            path = self._get_file_path(symbol)
+            is_new = not path.exists()
+            
+            with open(path, "a", encoding="utf-8") as f:
+                if is_new:
+                    f.write("timestamp,symbol,price,volume,oi,delta,theta,bid,ask\n")
+                for t in ticks:
+                    # ts, symbol, price, volume, oi, delta, theta, bid, ask
+                    line = f"{t[0].isoformat()},{t[1]},{t[2]},{t[3]},{t[4]},{t[5]},{t[6]},{t[7]},{t[8]}\n"
+                    f.write(line)
+
+from pathlib import Path
+
 class LiveTickRecorder:
     def __init__(self, default_provider: str = "fyers"):
         self.provider_name = default_provider.lower()
@@ -32,23 +65,32 @@ class LiveTickRecorder:
         self.greeks_lock = threading.Lock()
         self.event_queue = asyncio.Queue()
         self._ws_connected = False
+        self.file_logger = TickFileLogger()
+        self.enable_db = True
+        self.enable_file = True
 
     async def connect_db(self):
-        pool = await DatabaseManager.get_pool()
-        return pool
+        try:
+            pool = await DatabaseManager.get_pool()
+            return pool
+        except Exception:
+            return None
 
     def _normalize_tick_row(self, row):
-        ts, symbol, price, volume, bid, ask = row
+        # ts, symbol, price, volume, oi, delta, theta, bid, ask
+        ts, symbol, price, volume, oi, delta, theta, bid, ask = row
         if not symbol or price is None:
             return None
-        try:
-            price_val = float(price)
-            volume_val = int(volume) if volume is not None else 0
-            bid_val = float(bid) if bid is not None else 0.0
-            ask_val = float(ask) if ask is not None else 0.0
-            return (ts, str(symbol), price_val, volume_val, bid_val, ask_val)
-        except (TypeError, ValueError):
-            return None
+        
+        def _f(v, default=0.0):
+            try: return float(v) if v is not None else default
+            except: return default
+
+        return (
+            ts, str(symbol), _f(price), int(volume or 0), 
+            int(oi or 0), _f(delta, None), _f(theta, None), 
+            _f(bid), _f(ask)
+        )
 
     def _normalize_greeks_row(self, row):
         ts, symbol, delta, theta, gamma, vega, iv = row
@@ -94,33 +136,46 @@ class LiveTickRecorder:
                     await self.event_queue.put({"type": "save_drop", "provider": self.provider_name, "dropped": dropped_rows})
                 continue
 
-            try:
-                pool = await self.connect_db()
-                async with pool.acquire() as conn:
-                    table = f"broker_{self.provider_name}.market_ticks"
-                    await conn.executemany(
-                        f"INSERT INTO {table} (time, symbol, price, volume, bid, ask) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
-                        valid_rows,
-                    )
+            # 1. File Logging (Astra Mode)
+            if self.enable_file:
+                try:
+                    await asyncio.to_thread(self.file_logger.log_ticks, valid_rows)
+                except Exception as e:
+                    logger.error(f"File logging failed: {e}")
+
+            # 2. DB Logging (Legacy Mode)
+            if self.enable_db:
+                try:
+                    pool = await self.connect_db()
+                    if pool:
+                        async with pool.acquire() as conn:
+                            table = f"broker_{self.provider_name}.market_ticks"
+                            await conn.executemany(
+                                f"INSERT INTO {table} (time, symbol, price, volume, bid, ask) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
+                                valid_rows,
+                            )
+                            await self.event_queue.put(
+                                {
+                                    "type": "save",
+                                    "provider": self.provider_name,
+                                    "ticks": len(valid_rows),
+                                    "symbols": len(set(t[1] for t in valid_rows)),
+                                    "dropped": dropped_rows,
+                                }
+                            )
+                    else:
+                        # Silently skip if DB is disabled/offline
+                        pass
+                except Exception as exc:
+                    logger.exception("Tick persistence failed for provider=%s", self.provider_name)
                     await self.event_queue.put(
                         {
-                            "type": "save",
+                            "type": "save_error",
                             "provider": self.provider_name,
+                            "error": str(exc)[:300],
                             "ticks": len(valid_rows),
-                            "symbols": len(set(t[1] for t in valid_rows)),
-                            "dropped": dropped_rows,
                         }
                     )
-            except Exception as exc:
-                logger.exception("Tick persistence failed for provider=%s", self.provider_name)
-                await self.event_queue.put(
-                    {
-                        "type": "save_error",
-                        "provider": self.provider_name,
-                        "error": str(exc)[:300],
-                        "ticks": len(valid_rows),
-                    }
-                )
 
     async def save_greeks_to_db(self):
         while self.is_running:
@@ -142,52 +197,60 @@ class LiveTickRecorder:
             if not valid_rows:
                 continue
 
-            try:
-                pool = await self.connect_db()
-                async with pool.acquire() as conn:
-                    table = f"broker_{self.provider_name}.options_greeks_live"
-                    await conn.executemany(
-                        f"""
-                        INSERT INTO {table} (time, symbol, delta, theta, gamma, vega, iv)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        ON CONFLICT (time, symbol) DO UPDATE SET
-                            delta = EXCLUDED.delta,
-                            theta = EXCLUDED.theta,
-                            gamma = EXCLUDED.gamma,
-                            vega = EXCLUDED.vega,
-                            iv = EXCLUDED.iv
-                        """,
-                        valid_rows,
-                    )
+            if self.enable_db:
+                try:
+                    pool = await self.connect_db()
+                    if pool:
+                        async with pool.acquire() as conn:
+                            table = f"broker_{self.provider_name}.options_greeks_live"
+                            await conn.executemany(
+                                f"""
+                                INSERT INTO {table} (time, symbol, delta, theta, gamma, vega, iv)
+                                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                                ON CONFLICT (time, symbol) DO UPDATE SET
+                                    delta = EXCLUDED.delta,
+                                    theta = EXCLUDED.theta,
+                                    gamma = EXCLUDED.gamma,
+                                    vega = EXCLUDED.vega,
+                                    iv = EXCLUDED.iv
+                                """,
+                                valid_rows,
+                            )
+                            await self.event_queue.put(
+                                {
+                                    "type": "greeks_save",
+                                    "provider": self.provider_name,
+                                    "rows": len(valid_rows),
+                                    "dropped": dropped_rows,
+                                }
+                            )
+                except Exception as exc:
+                    logger.exception("Greeks persistence failed for provider=%s", self.provider_name)
                     await self.event_queue.put(
                         {
-                            "type": "greeks_save",
+                            "type": "greeks_save_error",
                             "provider": self.provider_name,
+                            "error": str(exc)[:300],
                             "rows": len(valid_rows),
-                            "dropped": dropped_rows,
                         }
                     )
-            except Exception as exc:
-                logger.exception("Greeks persistence failed for provider=%s", self.provider_name)
-                await self.event_queue.put(
-                    {
-                        "type": "greeks_save_error",
-                        "provider": self.provider_name,
-                        "error": str(exc)[:300],
-                        "rows": len(valid_rows),
-                    }
-                )
 
     def _on_fyers_message(self, message):
         if not isinstance(message, dict) or message.get("type") in ("cn", "ful", "sub"): return
         
         # Fyers LiteMode=False provides rich market depth via these standard internal keys
-        vol = message.get("vol_traded_today", message.get("v", 0))
-        bid = message.get("bid_price", message.get("bp1", 0.0))
-        ask = message.get("ask_price", message.get("ap1", 0.0))
-        
-        # Complex tick capture
-        self.tick_buffer.append((datetime.now(timezone.utc), message.get("symbol"), message.get("ltp"), vol, bid, ask))
+        # Complex tick capture: (ts, symbol, price, volume, oi, delta, theta, bid, ask)
+        self.tick_buffer.append((
+            datetime.now(timezone.utc), 
+            message.get("symbol"), 
+            message.get("ltp"), 
+            vol, 
+            message.get("oi", 0),
+            message.get("delta"),
+            message.get("theta"),
+            bid, 
+            ask
+        ))
 
         greeks = {
             "delta": message.get("delta"),
@@ -277,10 +340,23 @@ class LiveTickRecorder:
             if ltp is None:
                 continue
             volume = self._nested_find_first(feed_payload, ("vtt", "volume", "volTradedToday")) or 0
+            oi = self._nested_find_first(feed_payload, ("oi", "open_interest", "openInterest")) or 0
             bid, ask = self._extract_upstox_bid_ask(feed_payload)
-            self.tick_buffer.append((datetime.now(timezone.utc), instrument_key, ltp, volume, bid, ask))
-
             greeks = self._extract_upstox_greeks(feed_payload)
+            
+            # Complex tick capture: (ts, symbol, price, volume, oi, delta, theta, bid, ask)
+            self.tick_buffer.append((
+                datetime.now(timezone.utc), 
+                instrument_key, 
+                ltp, 
+                volume, 
+                oi,
+                greeks.get("delta"),
+                greeks.get("theta"),
+                bid, 
+                ask
+            ))
+
             if any(value is not None for value in greeks.values()):
                 self.greeks_buffer.append(
                     (

@@ -11,6 +11,10 @@ if os.path.exists(ENV_FILE):
 
 DB_URL = os.getenv("DATABASE_URL")
 
+import logging
+
+logger = logging.getLogger("trading_core.db")
+
 class DatabaseManager:
     """Manages TimescaleDB connections for all services."""
     
@@ -20,8 +24,13 @@ class DatabaseManager:
     async def get_pool(cls):
         if cls._pool is None:
             if not DB_URL:
-                raise ValueError(f"DATABASE_URL not found in {ENV_FILE}")
-            cls._pool = await asyncpg.create_pool(DB_URL)
+                logger.warning("DATABASE_URL not found. Database operations will be disabled (Zero-DB Mode).")
+                return None
+            try:
+                cls._pool = await asyncpg.create_pool(DB_URL)
+            except Exception as e:
+                logger.error(f"Failed to connect to database: {e}. Proceeding in Zero-DB Mode.")
+                return None
         return cls._pool
 
     @classmethod

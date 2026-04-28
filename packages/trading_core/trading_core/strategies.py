@@ -31,15 +31,29 @@ class StrategyContext:
     def get_param(self, key: str, default: Any = None) -> Any:
         return self.params.get(key, default)
 
-    async def buy(self, symbol: str, qty: int, price: Optional[float] = None, tag: str = ""):
+    async def log_signal(self, symbol: str, indicator: str, value: Any, threshold: Any, action: str, basket_id: str = "none"):
+        from trading_core.events import SignalEvent
+        await self.bus.publish(SignalEvent(
+            symbol=symbol,
+            indicator=indicator,
+            value=value,
+            threshold=threshold,
+            action=action,
+            basket_id=basket_id
+        ))
+
+    async def buy(self, symbol: str, qty: int, price: Optional[float] = None, tag: str = "", basket_id: str = "none"):
         order = Order(symbol=symbol, side=Side.BUY, quantity=qty, price=price, tag=tag)
-        # In the unified engine, the executor will listen for OrderEvents
-        from trading_core.events import OrderEvent, EventType
+        # Add basket_id to order object
+        setattr(order, "basket_id", basket_id)
+        from trading_core.events import OrderEvent
         await self.bus.publish(OrderEvent(order=order, action="SUBMITTED"))
         return order.order_id
 
-    async def sell(self, symbol: str, qty: int, price: Optional[float] = None, tag: str = ""):
+    async def sell(self, symbol: str, qty: int, price: Optional[float] = None, tag: str = "", basket_id: str = "none"):
         order = Order(symbol=symbol, side=Side.SELL, quantity=qty, price=price, tag=tag)
+        # Add basket_id to order object
+        setattr(order, "basket_id", basket_id)
         from trading_core.events import OrderEvent
         await self.bus.publish(OrderEvent(order=order, action="SUBMITTED"))
         return order.order_id

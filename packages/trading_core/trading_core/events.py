@@ -43,6 +43,16 @@ class OrderEvent(Event):
     event_type: EventType = field(default=EventType.ORDER, init=False)
 
 @dataclass(frozen=True, kw_only=True)
+class SignalEvent(Event):
+    symbol: str
+    indicator: str
+    value: Any
+    threshold: Any
+    action: str
+    basket_id: str = "none"
+    event_type: EventType = field(default=EventType.SIGNAL, init=False)
+
+@dataclass(frozen=True, kw_only=True)
 class FillEvent(Event):
     fill: Fill
     event_type: EventType = field(default=EventType.FILL, init=False)

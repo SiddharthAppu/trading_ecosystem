@@ -70,6 +70,26 @@ This document outlines the architecture, roles, and components of the core micro
 
 ---
 
+## PART III: Lightweight Cloud Architecture
+
+This architecture is designed for low-latency, low-cost execution on cloud environments (e.g., VPS, Lambda, or lightweight containers) where a persistent TimescaleDB might be too heavy or expensive.
+
+### 1. Data Collection (Tick-to-File)
+*   **Mechanism**: `LiveTickRecorder` is configured in `FILE_ONLY` mode.
+*   **Output**: Ticks and Greeks are appended to a date-stamped text file (e.g., `logs/ticks/NIFTY_2026-04-27.csv`).
+*   **Benefit**: Zero DB latency during the trading session and high portability.
+
+### 2. Strategy Execution (Journaled Orders)
+*   **Journaling**: Every order placement, modification, and fill is logged to `logs/journal.jsonl`.
+*   **State Management**: The runtime can recover its current position state by replaying the day's `journal.jsonl` upon restart.
+*   **Notifications**: Critical events (Execution, Risk Rejections) are pushed to Telegram via `notifier.py`.
+
+### 3. EOD Local Sync
+*   **Workflow**: At the end of the trading day, the cloud files (`ticks.csv` and `journal.jsonl`) are downloaded to the local desktop.
+*   **Ingestion**: A local utility script parses these files and performs a bulk `INSERT` into the main TimescaleDB `market_ticks` and `orders` tables.
+
+---
+
 ## Analysis & Redundancies
 
 ### 1. Unified Strategy Host

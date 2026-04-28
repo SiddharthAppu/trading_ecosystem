@@ -25,6 +25,7 @@ from services.execution_engine.portfolio import PortfolioManager
 from services.strategy_runtime.config import RuntimeSettings
 from services.strategy_runtime.notifier import CompositeNotifier, NotificationMessage
 from services.strategy_runtime.strategies import load_strategy, load_strategy_params
+from services.strategy_runtime.journal import JournalManager
 
 import websockets
 
@@ -276,6 +277,11 @@ class StrategyRuntime:
         self._latest_price_by_symbol: dict[str, float] = {}
         self._wire_event_handlers()
         self.executor = PaperExecutor(initial_capital=settings.initial_capital)
+        self.journal = JournalManager(
+            settings.log_file.replace(".log", "_journal.jsonl"),
+            strategy_name=settings.strategy_name,
+            timeframe=settings.timeframe
+        )
 
     def _build_feed(self, settings: RuntimeSettings):
         if settings.feed_source == "replay_ws":
@@ -311,6 +317,7 @@ class StrategyRuntime:
 
     def _wire_event_handlers(self) -> None:
         bus.subscribe(EventType.BAR, self._on_bar_event)
+        bus.subscribe(EventType.SIGNAL, self._on_signal_event)
         bus.subscribe(EventType.ORDER, self._on_order_event)
         bus.subscribe(EventType.FILL, self._on_fill_event)
 
@@ -329,6 +336,27 @@ class StrategyRuntime:
             },
         )
 
+    async def _on_signal_event(self, event: Any) -> None:
+        # Astra Signal Journaling
+        asyncio.create_task(self.journal.log_indicator_signal(
+            event.symbol,
+            event.indicator,
+            event.value,
+            event.threshold,
+            event.action,
+            basket_id=event.basket_id
+        ))
+        self._record_event(
+            "signal",
+            {
+                "symbol": event.symbol,
+                "indicator": event.indicator,
+                "value": event.value,
+                "action": event.action,
+                "basket_id": event.basket_id
+            }
+        )
+
     async def _on_order_event(self, event: OrderEvent) -> None:
         order = event.order
         if order.symbol != self.settings.symbol:
@@ -345,6 +373,21 @@ class StrategyRuntime:
                 "tag": order.tag,
             },
         )
+        
+        # Astra Journaling
+        basket_id = getattr(order, "basket_id", "none")
+        asyncio.create_task(self.journal.log_order(
+            order.symbol,
+            {
+                "order_id": order.order_id,
+                "side": order.side.value,
+                "quantity": order.quantity,
+                "price": order.price,
+                "tag": order.tag,
+                "status": "PLACED"
+            },
+            basket_id=basket_id
+        ))
 
         current_position = self.portfolio.get_position(order.symbol)
         current_quantity = current_position.quantity if current_position else 0
@@ -396,6 +439,20 @@ class StrategyRuntime:
                 "filled_at": fill.filled_at.isoformat(),
             },
         )
+        
+        # Astra Journaling
+        basket_id = getattr(fill, "basket_id", "none")
+        asyncio.create_task(self.journal.log_fill(
+            fill.symbol,
+            {
+                "order_id": fill.order_id,
+                "side": fill.side.value,
+                "quantity": fill.quantity,
+                "price": fill.price,
+                "filled_at": fill.filled_at.isoformat()
+            },
+            basket_id=basket_id
+        ))
         logger.info("Fill received: %s %s @ %s", fill.side, fill.quantity, fill.price)
         await self.notifier.send(
             NotificationMessage(
@@ -546,8 +603,12 @@ class StrategyRuntime:
 
     async def run(self) -> None:
         requires_auth = self.settings.feed_source != "replay_ws"
-        if requires_auth and not auth_manager.is_authenticated(self.settings.provider):
-            raise RuntimeError(f"Provider {self.settings.provider} is not authenticated")
+        if requires_auth:
+            try:
+                if not auth_manager.is_authenticated(self.settings.provider):
+                    logger.warning(f"Provider {self.settings.provider} is not authenticated via API. Attempting to proceed with local token.")
+            except Exception as e:
+                logger.error(f"Failed to check auth status via DB: {e}. Proceeding in offline/file mode.")
 
         self._running = True
         self._started_at = datetime.utcnow()
