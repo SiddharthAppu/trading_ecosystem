@@ -9,6 +9,7 @@ Astra operates as a standalone service that leverages `trading_core` for connect
 
 ### Role of `trading_core` (The Foundation)
 *   **Broker Adapters**: Standardized API for Fyers/Upstox. Handles auth, rate-limiting, and WebSocket reconnection.
+*   **Broker Account Queries**: Must expose positions, order status, order book, available funds, and margin so Astra can supervise live state.
 *   **Analytics Engine**: Provides pure-math functions for Greeks (Black-Scholes) and technical indicators.
 *   **Common Models**: Shared dataclasses for `Tick`, `Bar`, `Order`, and `Position`.
 *   **Symbol Resolver**: Maps human-readable symbols (e.g., "NIFTY24APR22000CE") to broker-specific tokens.
@@ -54,6 +55,17 @@ Example:
 *   **Memory-Efficient Windows**: Astra maintains a sliding window of the last `N` bars in a `deque`.
 *   **On-the-Fly Aggregation**: Ticks are aggregated into 1m/5m bars in memory.
 *   **Analytics Hook**: Every time a bar completes, `trading_core.analytics` is called to compute EMA, RSI, or Greeks.
+*   **Quality Requirement**: The indicator engine should support a vetted library backend behind a stable internal facade; in-house implementations may remain as fallback/reference, not the only production source.
+*   **Integration Timing**: TA-Lib should be integrated once the analytics facade and parity harness are ready, and before the first production-kit packaging flow is finalized.
+*   **Current Status**: The analytics facade now supports backend selection with safe fallback to in-house calculations when TA-Lib is absent.
+
+### Indicator Backend Comparison
+| Option | Pros | Cons | Recommendation |
+| :--- | :--- | :--- | :--- |
+| **TA-Lib** | Mature, fast, broadly trusted | Native install friction | Preferred runtime backend |
+| **pandas-ta** | Easy experimentation, many indicators | Heavier pandas dependency | Good for research workflows |
+| **stock-indicators** | Strong correctness reputation | Smaller ecosystem footprint | Viable fallback candidate |
+| **vectorbt** | Excellent analysis tooling | Too heavy for live runtime core | Use for research only |
 
 ---
 
@@ -61,3 +73,14 @@ Example:
 *   **DB-Less**: Must start and run even if the PostgreSQL/TimescaleDB environment is completely offline.
 *   **Low Footprint**: Target < 512MB RAM for the entire runtime.
 *   **Auto-Recovery**: On restart, Astra must read `journal.jsonl` to reconstruct its current "Net Position" before resuming the strategy.
+*   **Broker Truth Queries**: The runtime must be able to ask the active adapter for positions, order status, order book, available funds, and margin at any time.
+
+---
+
+## 5. Deployment Requirements
+*   **Self-Contained Kit**: Astra production delivery should be an OS-specific deployable kit that includes code plus pinned runtime dependencies.
+*   **Binary Dependency Inclusion**: Native dependencies such as **TA-Lib** must be bundled or pre-installed as part of the build output, not left to manual operator setup.
+*   **Config Externalization**: Secrets, broker auth tokens, and environment-specific config must remain external to the immutable code bundle.
+*   **Repeatable Build**: Astra must have a repeatable build process that can generate the same kit for a given version, target OS, and Python version.
+*   **Preferred Baseline**: Use Python **3.11** or **3.12** as the first production-kit target for better TA-Lib packaging compatibility.
+*   **Smoke-Test Gate**: A built kit must pass startup and indicator-validation smoke tests before release.

@@ -1,3 +1,13 @@
+import datetime
+import os
+
+try:
+    import numpy as np
+    import talib
+except ImportError:
+    np = None
+    talib = None
+
 try:
     from py_vollib.black_scholes import black_scholes as bs
     from py_vollib.black_scholes.greeks.numerical import delta, gamma, theta, vega, rho
@@ -10,7 +20,25 @@ except ImportError:
     vega = None
     rho = None
     iv = None
-import datetime
+
+
+INDICATOR_BACKEND_ENV = "TRADING_CORE_INDICATOR_BACKEND"
+DEFAULT_INDICATOR_BACKEND = "auto"
+
+
+def _backend_preference() -> str:
+    return os.getenv(INDICATOR_BACKEND_ENV, DEFAULT_INDICATOR_BACKEND).strip().lower()
+
+
+def get_indicator_backend_name() -> str:
+    backend = _backend_preference()
+    if backend == "inhouse":
+        return "inhouse"
+    if backend == "talib":
+        return "talib" if talib is not None else "inhouse"
+    if talib is not None:
+        return "talib"
+    return "inhouse"
 
 
 def _to_float(value):
@@ -22,7 +50,29 @@ def _to_float(value):
         return None
 
 
-def calc_sma(values: list[float | None], period: int) -> list[float | None]:
+def _to_talib_input(values: list[float | None]):
+    import numpy as np  # always available when talib is available
+    return np.array(
+        [float("nan") if value is None else float(value) for value in values],
+        dtype=np.float64,
+    )
+
+
+def _from_talib_output(values) -> list[float | None]:
+    output: list[float | None] = []
+    for value in values:
+        numeric = _to_float(value)
+        if numeric is None:
+            output.append(None)
+            continue
+        if numeric != numeric:
+            output.append(None)
+            continue
+        output.append(numeric)
+    return output
+
+
+def _calc_sma_inhouse(values: list[float | None], period: int) -> list[float | None]:
     output: list[float | None] = [None] * len(values)
     for idx in range(len(values)):
         if idx < period - 1:
@@ -34,7 +84,7 @@ def calc_sma(values: list[float | None], period: int) -> list[float | None]:
     return output
 
 
-def calc_ema(values: list[float | None], period: int) -> list[float | None]:
+def _calc_ema_inhouse(values: list[float | None], period: int) -> list[float | None]:
     output: list[float | None] = [None] * len(values)
     if len(values) < period:
         return output
@@ -67,7 +117,7 @@ def calc_ema(values: list[float | None], period: int) -> list[float | None]:
     return output
 
 
-def calc_rsi(values: list[float | None], period: int) -> list[float | None]:
+def _calc_rsi_inhouse(values: list[float | None], period: int) -> list[float | None]:
     output: list[float | None] = [None] * len(values)
     if len(values) <= period:
         return output
@@ -117,6 +167,24 @@ def calc_rsi(values: list[float | None], period: int) -> list[float | None]:
     return output
 
 
+def calc_sma(values: list[float | None], period: int) -> list[float | None]:
+    if get_indicator_backend_name() == "talib":
+        return _from_talib_output(talib.SMA(_to_talib_input(values), timeperiod=period))
+    return _calc_sma_inhouse(values, period)
+
+
+def calc_ema(values: list[float | None], period: int) -> list[float | None]:
+    if get_indicator_backend_name() == "talib":
+        return _from_talib_output(talib.EMA(_to_talib_input(values), timeperiod=period))
+    return _calc_ema_inhouse(values, period)
+
+
+def calc_rsi(values: list[float | None], period: int) -> list[float | None]:
+    if get_indicator_backend_name() == "talib":
+        return _from_talib_output(talib.RSI(_to_talib_input(values), timeperiod=period))
+    return _calc_rsi_inhouse(values, period)
+
+
 def compute_indicator_rows(rows: list[dict], indicators: list[str]) -> None:
     if not rows or not indicators:
         return
@@ -130,21 +198,32 @@ def compute_indicator_rows(rows: list[dict], indicators: list[str]) -> None:
     macd_signal = None
     macd_histogram = None
     if "macd" in indicators:
-        ema12 = calc_ema(closes, 12)
-        ema26 = calc_ema(closes, 26)
-        macd_line = []
-        for idx in range(len(closes)):
-            if ema12[idx] is None or ema26[idx] is None:
-                macd_line.append(None)
-            else:
-                macd_line.append(ema12[idx] - ema26[idx])
-        macd_signal = calc_ema(macd_line, 9)
-        macd_histogram = []
-        for idx in range(len(closes)):
-            if macd_line[idx] is None or macd_signal[idx] is None:
-                macd_histogram.append(None)
-            else:
-                macd_histogram.append(macd_line[idx] - macd_signal[idx])
+        if get_indicator_backend_name() == "talib":
+            macd_line_raw, macd_signal_raw, macd_histogram_raw = talib.MACD(
+                _to_talib_input(closes),
+                fastperiod=12,
+                slowperiod=26,
+                signalperiod=9,
+            )
+            macd_line = _from_talib_output(macd_line_raw)
+            macd_signal = _from_talib_output(macd_signal_raw)
+            macd_histogram = _from_talib_output(macd_histogram_raw)
+        else:
+            ema12 = calc_ema(closes, 12)
+            ema26 = calc_ema(closes, 26)
+            macd_line = []
+            for idx in range(len(closes)):
+                if ema12[idx] is None or ema26[idx] is None:
+                    macd_line.append(None)
+                else:
+                    macd_line.append(ema12[idx] - ema26[idx])
+            macd_signal = calc_ema(macd_line, 9)
+            macd_histogram = []
+            for idx in range(len(closes)):
+                if macd_line[idx] is None or macd_signal[idx] is None:
+                    macd_histogram.append(None)
+                else:
+                    macd_histogram.append(macd_line[idx] - macd_signal[idx])
 
     for idx, row in enumerate(rows):
         if ema20 is not None:

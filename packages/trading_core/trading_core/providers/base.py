@@ -54,3 +54,23 @@ class BrokerAdapter(ABC):
     def get_positions(self):
         """Fetches current open positions from the broker."""
         raise NotImplementedError()
+
+    def get_order_status(self, order_id: str):
+        """Fetches status/details for a specific broker order id."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not implement get_order_status")
+
+    def get_orders(self):
+        """Fetches broker order book for the current session/account."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not implement get_orders")
+
+    def get_available_funds(self):
+        """Fetches currently available funds/cash for trading."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not implement get_available_funds")
+
+    def get_margin(self):
+        """Fetches margin details for the account."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not implement get_margin")
+
+    def get_portfolio_status(self):
+        """Fetches a normalized account snapshot (positions/holdings/funds where supported)."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not implement get_portfolio_status")

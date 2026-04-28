@@ -1,0 +1,24 @@
+# Astra runtime kit dependency manifest.
+#
+# This file is intentionally separated from packages/trading_core/setup.py so we can
+# evolve production-kit packaging independently from editable local development installs.
+#
+# Next hardening step: pin exact versions after validating the target production Python
+# version and OS image. Prefer Python 3.11 or 3.12 for the first TA-Lib-based kit build.
+
+numpy
+pandas
+scipy
+aiohttp
+python-dotenv
+requests
+websockets
+fastapi
+uvicorn
+asyncpg
+py-vollib
+blackscholes
+pyotp
+fyers-apiv3
+upstox-python-sdk
+TA-Lib
