@@ -248,3 +248,33 @@ class FyersAdapter(BrokerAdapter):
             raise ValueError("No expiries found in Fyers option chain response.")
 
         return sorted(expiries)
+
+    def place_order(self, symbol: str, side: str, quantity: int, order_type: str = "MARKET", price: float = None, tag: str = ""):
+        client = self._get_client()
+        type_map = {"MARKET": 2, "LIMIT": 1}
+        side_map = {"BUY": 1, "SELL": -1}
+        
+        data = {
+            "symbol": symbol,
+            "qty": int(quantity),
+            "type": type_map.get(order_type.upper(), 2),
+            "side": side_map.get(side.upper(), 1),
+            "productType": "INTRADAY",
+            "limitPrice": float(price) if price else 0.0,
+            "stopPrice": 0.0,
+            "validity": "DAY",
+            "disclosedQty": 0,
+            "offlineOrder": "False",
+            "tag": tag
+        }
+        response = client.place_order(data=data)
+        if response.get("s") != "ok":
+            raise ValueError(f"Fyers Order Error: {response.get('message')}")
+        return response.get("id")
+
+    def get_positions(self):
+        client = self._get_client()
+        response = client.positions()
+        if response.get("s") != "ok":
+            return []
+        return response.get("netPositions", [])

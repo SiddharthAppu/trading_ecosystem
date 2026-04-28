@@ -25,7 +25,7 @@ class TickFileLogger:
 
     def _get_file_path(self, symbol: str):
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        clean_symbol = symbol.replace(":", "_").replace("-", "_")
+        clean_symbol = symbol.replace(":", "_").replace("-", "_").replace("|", "_")
         return self.base_dir / f"{clean_symbol}_{date_str}.csv"
 
     def log_ticks(self, rows: List[Any]):
@@ -152,7 +152,7 @@ class LiveTickRecorder:
                             table = f"broker_{self.provider_name}.market_ticks"
                             await conn.executemany(
                                 f"INSERT INTO {table} (time, symbol, price, volume, bid, ask) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
-                                valid_rows,
+                                [(r[0], r[1], r[2], r[3], r[7], r[8]) for r in valid_rows],
                             )
                             await self.event_queue.put(
                                 {
@@ -239,6 +239,10 @@ class LiveTickRecorder:
         if not isinstance(message, dict) or message.get("type") in ("cn", "ful", "sub"): return
         
         # Fyers LiteMode=False provides rich market depth via these standard internal keys
+        vol = message.get("v") or message.get("vol_traded_today") or 0
+        bid = message.get("bp1") or 0.0
+        ask = message.get("sp1") or 0.0
+
         # Complex tick capture: (ts, symbol, price, volume, oi, delta, theta, bid, ask)
         self.tick_buffer.append((
             datetime.now(timezone.utc), 

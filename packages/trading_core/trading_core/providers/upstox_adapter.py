@@ -233,3 +233,24 @@ class UpstoxAdapter(BrokerAdapter):
 
         expiries = sorted({str(contract.get("expiry")) for contract in contracts if contract.get("expiry")})
         return expiries
+
+    def place_order(self, symbol: str, side: str, quantity: int, order_type: str = "MARKET", price: float = None, tag: str = ""):
+        payload = {
+            "quantity": int(quantity),
+            "product": "I", # Intraday
+            "validity": "DAY",
+            "price": float(price) if price else 0.0,
+            "tag": tag,
+            "instrument_token": symbol,
+            "order_type": order_type.upper(),
+            "transaction_type": side.upper(),
+            "disclosed_quantity": 0,
+            "trigger_price": 0.0,
+            "is_amo": False
+        }
+        response = self._request("POST", "/v2/order/place", data=payload)
+        return response.get("data", {}).get("order_id")
+
+    def get_positions(self):
+        response = self._request("GET", "/v2/portfolio/net-positions")
+        return response.get("data", [])

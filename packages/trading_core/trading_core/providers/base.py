@@ -44,3 +44,13 @@ class BrokerAdapter(ABC):
     def get_option_expiries(self, underlying_symbol: str) -> list[str]:
         """Returns available option expiries for the given underlying symbol."""
         raise NotImplementedError()
+
+    @abstractmethod
+    def place_order(self, symbol: str, side: str, quantity: int, order_type: str = "MARKET", price: float = None, tag: str = ""):
+        """Places an order with the broker."""
+        raise NotImplementedError()
+
+    @abstractmethod
+    def get_positions(self):
+        """Fetches current open positions from the broker."""
+        raise NotImplementedError()

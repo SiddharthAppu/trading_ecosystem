@@ -14,6 +14,7 @@ def _parse_csv(raw_value: str, default: list[str]) -> list[str]:
 class RuntimeSettings:
     feed_source: str = "broker"
     provider: str = "upstox"
+    trading_provider: str = "" # Defaults to 'provider' if empty
     symbol: str = "NSE_INDEX|Nifty 50"
     timeframe: str = "1m"
     polling_interval_seconds: int = 20
@@ -43,6 +44,7 @@ class RuntimeSettings:
         return cls(
             feed_source=os.getenv("STRATEGY_RUNTIME_FEED_SOURCE", "broker").strip().lower(),
             provider=os.getenv("STRATEGY_RUNTIME_PROVIDER", "upstox").strip().lower(),
+            trading_provider=os.getenv("STRATEGY_RUNTIME_TRADING_PROVIDER", "").strip().lower(),
             symbol=os.getenv("STRATEGY_RUNTIME_SYMBOL", "NSE_INDEX|Nifty 50").strip(),
             timeframe=os.getenv("STRATEGY_RUNTIME_TIMEFRAME", "1m").strip().lower(),
             polling_interval_seconds=int(os.getenv("STRATEGY_RUNTIME_POLL_SECONDS", "20")),

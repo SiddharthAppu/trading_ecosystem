@@ -19,6 +19,11 @@ class ProviderRegistry:
 
             self.register(normalized, UpstoxAdapter())
             return
+        if normalized == "zerodha":
+            from trading_core.providers.zerodha_adapter import ZerodhaAdapter
+
+            self.register(normalized, ZerodhaAdapter())
+            return
         raise ValueError(f"Provider '{name}' not found in registry.")
 
     def get_adapter(self, name):

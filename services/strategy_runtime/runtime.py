@@ -20,8 +20,8 @@ from trading_core.events import EventType, FillEvent, OrderEvent, TickEvent, bus
 from trading_core.models import Bar, PositionSide, Side, Tick
 from trading_core.strategies import Strategy, StrategyContext
 
-from services.execution_engine.executor import PaperExecutor
-from services.execution_engine.portfolio import PortfolioManager
+from services.strategy_runtime.portfolio import PortfolioManager
+from services.strategy_runtime.executor import PaperExecutor, LiveExecutor
 from services.strategy_runtime.config import RuntimeSettings
 from services.strategy_runtime.notifier import CompositeNotifier, NotificationMessage
 from services.strategy_runtime.strategies import load_strategy, load_strategy_params
@@ -275,8 +275,18 @@ class StrategyRuntime:
         self._recent_events: deque[dict[str, Any]] = deque(maxlen=500)
         self.strategy = self._build_strategy()
         self._latest_price_by_symbol: dict[str, float] = {}
+        # Setup Adapters
+        self.data_adapter = get_adapter(settings.provider)
+        self.trading_provider = settings.trading_provider or settings.provider
+        self.trading_adapter = get_adapter(self.trading_provider)
+        
+        # Setup Executor
+        if self.trading_provider == "paper":
+             self.executor = PaperExecutor(initial_capital=settings.initial_capital)
+        else:
+             self.executor = LiveExecutor(adapter=self.trading_adapter)
+
         self._wire_event_handlers()
-        self.executor = PaperExecutor(initial_capital=settings.initial_capital)
         self.journal = JournalManager(
             settings.log_file.replace(".log", "_journal.jsonl"),
             strategy_name=settings.strategy_name,
