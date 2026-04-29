@@ -5,18 +5,24 @@ This document tracks upcoming features, improvements, and bugs to address in the
 
 ## 🎯 High Priority
 - [ ] **Astra Standalone Desktop Kit (MVP Freeze)**: Package a deployable Astra bundle that can be copied to any desktop path, configured in-place, and launched without workspace-relative assumptions.
-- [x] **Astra Live Paper Launcher (2026-04-28)**: Added `scripts/start_strategy_runtime_live_paper.ps1` with env loading, live-paper defaults (`feed_source=broker`, `trading_provider=paper`), auth-dir preflight warning, and path-agnostic runtime startup.
-- [x] **Astra Tick Capture to File (2026-04-28)**: Added `scripts/start_upstox_tick_capture_file.ps1` wrapper for Upstox `full` mode with ATM ± strike window control; `quick_live_recorder.py` now explicitly reports flat-file spooling to `logs/ticks/` and supports `--max-symbols` throttling.
 - [ ] **Astra EOD Manual Import Utility**: Add a script that imports captured tick files into DB on demand after market close, independent from runtime execution.
 - [ ] **Astra Strategy V1 (NIFTY Trend Options, Paper Only)**: Implement a 5-minute trend-following strategy on NIFTY50 that selects the closest premium-to-200 option strike (CE/PE), enters paper trades, and exits at fixed 2:1 reward:risk.
 - [ ] **Astra Strategy Reason Log**: Emit a human-readable strategy decision log (`.txt`) that records trend checks, strike selection rationale, entry, SL, target, and exit reasons.
 - [ ] **Astra Self-Heal Supervisor**: Poll broker positions and order book on a fixed cadence, compare against runtime memory, and emit recovery actions plus Telegram alerts on drift.
 - [ ] **Astra Journal Recovery**: Rebuild positions, pending orders, and basket state from `journal.jsonl` during startup before strategy execution resumes.
+- [ ] **Test Journal Event Linking (TradingView + Local Chart)**: Validate the new Astra journal-to-chart integration:
+  - Start strategy runtime and generate live trades.
+  - Navigate to Journal page → Live Strategy Events section and verify events appear with timestamps.
+  - Click [Chart] button and verify chart page opens with event marker and focused timestamp.
+  - Click [TV] button and verify TradingView opens with correct symbol and timeframe.
+  - Test Journal Events tab (`/journal-events`) filters by symbol and event type.
+  - Run `UtilTools/journal_event_linker.py` to generate markdown/json reports offline.
+  - Verify Nifty option symbol mapping in `config/strategies/tradingview_symbol_map.json` works for custom contracts.
 - [ ] **Astra Broker Capability Parity**: Implement the expanded `BrokerAdapter` account-query methods consistently across Fyers and Upstox, not only Zerodha.
 - [ ] **Astra Runtime Broker Status API**: Expose broker-side positions, orders, funds, and margin from `strategy_runtime` status endpoints for operational visibility.
-- [ ] **Astra Indicator Backend Upgrade**: Put a stable adapter layer in front of technical indicators, integrate TA-Lib as the preferred backend, benchmark it against current in-house outputs, and migrate only after parity checks pass.
+- [x] **Astra Indicator Backend Upgrade**: Put a stable adapter layer in front of technical indicators, integrate TA-Lib as the preferred backend, benchmark it against current in-house outputs, and migrate only after parity checks pass.
 - [ ] **Astra Production Kit Generator**: Add a build script that emits an OS-specific Astra kit containing runtime code, pinned Python dependencies, TA-Lib, startup scripts, example env/config, and verification steps.
-- [ ] **Astra Order Lifecycle Controls**: Add `cancel_order`, `modify_order`, and normalized trade/fill queries to `BrokerAdapter` for recovery workflows.
+- [x] **Astra Order Lifecycle Controls**: Add `cancel_order`, `modify_order`, and normalized trade/fill queries to `BrokerAdapter` for recovery workflows.
 - [ ] **Greeks Normalization Pipeline (Phase 2)**: Add strict field-level reconciliation, null-rate monitoring, and replay-grade validation over provider payload drift.
 - [ ] **Provider Payload Parity Hardening**: Continue validating symbol-level payload differences and fallback extraction logic for both providers.
 - [ ] **Master Recorder Supervisor**: Add auto-restart, per-worker log files, and alarm hooks for failed child processes in `scripts/master_recorder.py`.

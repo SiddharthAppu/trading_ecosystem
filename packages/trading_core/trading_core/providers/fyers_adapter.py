@@ -278,3 +278,32 @@ class FyersAdapter(BrokerAdapter):
         if response.get("s") != "ok":
             return []
         return response.get("netPositions", [])
+
+    def cancel_order(self, order_id: str):
+        client = self._get_client()
+        response = client.cancel_order(data={"id": order_id})
+        if response.get("s") != "ok":
+            raise ValueError(f"Fyers cancel_order error: {response.get('message')}")
+        return response.get("id", order_id)
+
+    def modify_order(self, order_id: str, quantity: int | None = None, price: float | None = None, order_type: str | None = None):
+        client = self._get_client()
+        data: dict = {"id": order_id}
+        if quantity is not None:
+            data["qty"] = int(quantity)
+        if price is not None:
+            data["limitPrice"] = float(price)
+        if order_type is not None:
+            type_map = {"MARKET": 2, "LIMIT": 1}
+            data["type"] = type_map.get(order_type.upper(), 2)
+        response = client.modify_order(data=data)
+        if response.get("s") != "ok":
+            raise ValueError(f"Fyers modify_order error: {response.get('message')}")
+        return response.get("id", order_id)
+
+    def get_trades(self):
+        client = self._get_client()
+        response = client.tradebook()
+        if response.get("s") != "ok":
+            return []
+        return response.get("tradeBook", [])

@@ -22,14 +22,23 @@ class JournalManager:
     def _ensure_dir(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    async def log_event(self, event_type: str, symbol: str, payload: Dict[str, Any], basket_id: str = "none"):
+    async def log_event(
+        self,
+        event_type: str,
+        symbol: str,
+        payload: Dict[str, Any],
+        basket_id: str = "none",
+        event_ts: str | None = None,
+    ):
         """Append an event to the journal file with full context."""
         if not self._initialized:
             self._ensure_dir()
             self._initialized = True
 
+        write_ts = datetime.now(timezone.utc).isoformat()
         entry = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": write_ts,
+            "event_ts": event_ts or write_ts,
             "event": event_type,
             "strategy": self.strategy_name,
             "timeframe": self.timeframe,
@@ -41,8 +50,8 @@ class JournalManager:
         async with self._lock:
             try:
                 await asyncio.to_thread(self._append_to_file, entry)
-            except Exception as e:
-                logger.error(f"Failed to write to journal: {e}")
+            except OSError as exc:
+                logger.error("Failed to write to journal: %s", exc)
 
     def _append_to_file(self, entry: Dict[str, Any]):
         with open(self.path, "a", encoding="utf-8") as f:
@@ -60,7 +69,13 @@ class JournalManager:
         await self.log_event("ORDER_PLACED", symbol, order_data, basket_id=basket_id)
 
     async def log_fill(self, symbol: str, fill_data: Dict[str, Any], basket_id: str = "none"):
-        await self.log_event("ORDER_FILL", symbol, fill_data, basket_id=basket_id)
+        await self.log_event(
+            "ORDER_FILL",
+            symbol,
+            fill_data,
+            basket_id=basket_id,
+            event_ts=str(fill_data.get("filled_at", "")) or None,
+        )
 
     def recover_state(self) -> list[Dict[str, Any]]:
         """

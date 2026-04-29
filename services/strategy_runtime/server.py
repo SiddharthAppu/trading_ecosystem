@@ -12,6 +12,7 @@ from services.strategy_runtime.bootstrap import ensure_repo_paths
 ensure_repo_paths()
 
 from services.strategy_runtime.config import RuntimeSettings
+from services.strategy_runtime.journal_links import read_journal_events
 from services.strategy_runtime.main import configure_logging
 from services.strategy_runtime.runtime import StrategyRuntime, create_runtime
 
@@ -56,7 +57,7 @@ async def _ensure_started() -> None:
     async def _runner() -> None:
         try:
             await runtime.run()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
             logger.exception("Strategy runtime task failed: %s", exc)
 
     state.runtime_task = asyncio.create_task(_runner())
@@ -97,6 +98,25 @@ async def status() -> dict:
 async def events(limit: int = Query(default=100, ge=1, le=500)) -> dict:
     runtime = _get_runtime()
     return {"events": runtime.get_recent_events(limit=limit)}
+
+
+@app.get("/journal/events")
+async def journal_events(
+    limit: int = Query(default=200, ge=1, le=5000),
+    symbol: str | None = Query(default=None),
+    event: str | None = Query(default=None),
+) -> dict:
+    runtime = _get_runtime()
+    rows = read_journal_events(
+        runtime.journal.path.as_posix(),
+        limit=limit,
+        symbol=symbol,
+        event=event,
+    )
+    return {
+        "journal_path": runtime.journal.path.as_posix(),
+        "events": rows,
+    }
 
 
 @app.get("/broker/status")

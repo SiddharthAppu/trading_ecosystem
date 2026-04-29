@@ -21,6 +21,7 @@ This guide targets the following operating model:
 Available now:
 - Strategy runtime service with paper execution.
 - Journal logging for indicator, order, and fill events (`jsonl`).
+- **Journal event deep-linking** to TradingView and local chart with event markers (new).
 - Runtime self-heal restart loop and broker status endpoint.
 - TA-Lib-backed indicator facade.
 - One-click live-paper launcher (`scripts/start_strategy_runtime_live_paper.ps1`).
@@ -28,6 +29,7 @@ Available now:
 - NIFTY trend options strategy (`nifty_trend_options`) with premium-near-200 selection and 2:1 reward:risk exits.
 - Manual file-to-DB import utility (`scripts/lib/import_ticks_to_db.py`).
 - Astra kit builder (`scripts/build_astra_kit.ps1`).
+- UtilTools journal event linker for offline report generation.
 
 ## 3. Desktop Kit Build And Install
 
@@ -156,7 +158,58 @@ Import command example:
 python .\scripts\lib\import_ticks_to_db.py --date 2026-04-28 --dir .\logs\ticks
 ```
 
-## 6. Logging And Artifacts You Should See
+## 6. Journal Event Linking (Visualization + Deep-Links)
+
+### Overview
+Astra journal JSONL is now the single source of truth for all events. Each event (ORDER_PLACED, ORDER_FILL, INDICATOR_PASSED) can be visualized directly on a chart with precise event markers, and linked to TradingView for external chart inspection.
+
+### Access Points
+
+**In Dashboard (Real-Time):**
+- Go to **Journal** page → **Live Strategy Events** panel (bottom section).
+- Events appear as they are written to `journal.jsonl`.
+- Click **Chart** to open the event in local dashboard with marker.
+- Click **TV** to open TradingView with matching symbol/timeframe.
+
+**In Dashboard (Detailed View):**
+- Go to **Journal Events** tab (`/journal-events`).
+- Filter by symbol, event type, or limit.
+- Shows full event metadata and both chart link options.
+
+**Offline Report Generation:**
+```powershell
+python .\UtilTools\journal_event_linker.py `
+  --journal .\logs\strategy_runtime\runtime_journal.jsonl `
+  --output-md .\logs\strategy_runtime\journal_event_links.md `
+  --output-json .\logs\strategy_runtime\journal_event_links.json
+```
+
+Optional filters:
+```powershell
+python .\UtilTools\journal_event_linker.py `
+  --journal .\logs\strategy_runtime\runtime_journal.jsonl `
+  --event ORDER_FILL `
+  --symbol NIFTY `
+  --limit 500
+```
+
+### Symbol Mapping for TradingView
+
+For custom or option symbols to resolve correctly on TradingView, maintain the mapping file:
+- `config\strategies\tradingview_symbol_map.json`
+
+Example:
+```json
+{
+  "NIFTY": "NSE:NIFTY",
+  "BANKNIFTY": "NSE:BANKNIFTY",
+  "FINNIFTY": "NSE:FINNIFTY"
+}
+```
+
+For Nifty options, the tool auto-detects symbols like `NIFTY24APR26000CE` and converts to TradingView format `NFO:NIFTY240426000CE`.
+
+## 7. Logging And Artifacts You Should See
 
 Required files:
 - Strategy runtime logs: `logs\strategy_runtime\runtime.log`
@@ -169,8 +222,9 @@ Minimum acceptance checks:
 - Journal contains `ORDER_PLACED` and `ORDER_FILL` events for paper trades.
 - Tick file contains ATM and nearby strike ticks for CE/PE.
 - Manual import script reports inserted row counts by symbol/date.
+- Live Strategy Events panel shows events with timestamps and chart links.
 
-## 7. Mapping To Existing Daily Capture Workflow
+## 8. Mapping To Existing Daily Capture Workflow
 
 Existing workflow script:
 - `scripts\run_daily_capture_eod_workflow.bat`
@@ -182,7 +236,7 @@ What remains to align with Astra standalone mode:
 - Keep EOD verification and backup steps optional but available.
 - Ensure capture and strategy runtime can run together without port/process conflicts.
 
-## 8. Risks And Mitigations
+## 9. Risks And Mitigations
 
 Risk: Missing auth token at runtime.
 - Mitigation: preflight checks for token file presence and auth reload endpoint.
@@ -196,7 +250,7 @@ Risk: Tick capture overload from broad symbol set.
 Risk: File import schema drift.
 - Mitigation: lock JSONL schema and validate before import.
 
-## 9. Implementation Checklist
+## 10. Implementation Checklist
 
 ✅ Completed:
 - Live-paper startup script for Astra runtime (`scripts/start_strategy_runtime_live_paper.ps1`).
@@ -212,7 +266,7 @@ P1 (Future):
 Owner: Astra runtime track
 Status: Core implementation complete; ready for day-1 live-paper testing
 
-## 10. Pre-Market Testing (Tonight / Tomorrow Before Open)
+## 11. Pre-Market Testing (Tonight / Tomorrow Before Open)
 
 Run these in order from kit root.
 

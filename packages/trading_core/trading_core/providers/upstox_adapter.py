@@ -301,3 +301,28 @@ class UpstoxAdapter(BrokerAdapter):
     def get_positions(self):
         response = self._request("GET", "/v2/portfolio/net-positions")
         return response.get("data", [])
+
+    def cancel_order(self, order_id: str):
+        response = self._request("DELETE", "/v2/order/cancel", query={"order_id": order_id, "api-version": "2.0"})
+        cancelled_id = response.get("data", {}).get("order_id")
+        if not cancelled_id:
+            raise ValueError(f"Upstox cancel_order response missing order_id: {response}")
+        return cancelled_id
+
+    def modify_order(self, order_id: str, quantity: int | None = None, price: float | None = None, order_type: str | None = None):
+        payload: dict = {"order_id": order_id}
+        if quantity is not None:
+            payload["quantity"] = int(quantity)
+        if price is not None:
+            payload["price"] = float(price)
+        if order_type is not None:
+            payload["order_type"] = order_type.upper()
+        response = self._request("PUT", "/v2/order/modify", data=payload)
+        modified_id = response.get("data", {}).get("order_id")
+        if not modified_id:
+            raise ValueError(f"Upstox modify_order response missing order_id: {response}")
+        return modified_id
+
+    def get_trades(self):
+        response = self._request("GET", "/v2/order/trades/get-trades-for-day")
+        return response.get("data", [])

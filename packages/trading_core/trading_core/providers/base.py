@@ -74,3 +74,15 @@ class BrokerAdapter(ABC):
     def get_portfolio_status(self):
         """Fetches a normalized account snapshot (positions/holdings/funds where supported)."""
         raise NotImplementedError(f"{self.__class__.__name__} does not implement get_portfolio_status")
+
+    def cancel_order(self, order_id: str):
+        """Cancels a pending order by broker order id. Returns the cancelled order_id on success."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not implement cancel_order")
+
+    def modify_order(self, order_id: str, quantity: int | None = None, price: float | None = None, order_type: str | None = None):
+        """Modifies a pending order. Only supplied fields are updated. Returns the modified order_id."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not implement modify_order")
+
+    def get_trades(self):
+        """Fetches executed trade fills (tradebook) for the current session."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not implement get_trades")

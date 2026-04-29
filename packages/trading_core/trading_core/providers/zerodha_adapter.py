@@ -417,3 +417,32 @@ class ZerodhaAdapter(BrokerAdapter):
             "funds": self.get_available_funds(),
             "margin": self.get_margin(),
         }
+
+    def cancel_order(self, order_id: str):
+        response = self._request_json(
+            "DELETE",
+            f"/orders/regular/{order_id}",
+            data={"variety": "regular", "order_id": order_id},
+        )
+        cancelled_id = response.get("data", {}).get("order_id")
+        if not cancelled_id:
+            raise ValueError(f"Zerodha cancel_order response missing order_id: {response}")
+        return cancelled_id
+
+    def modify_order(self, order_id: str, quantity: int | None = None, price: float | None = None, order_type: str | None = None):
+        data: dict = {"variety": "regular", "order_id": order_id}
+        if quantity is not None:
+            data["quantity"] = int(quantity)
+        if price is not None:
+            data["price"] = float(price)
+        if order_type is not None:
+            data["order_type"] = order_type.upper()
+        response = self._request_json("PUT", f"/orders/regular/{order_id}", data=data)
+        modified_id = response.get("data", {}).get("order_id")
+        if not modified_id:
+            raise ValueError(f"Zerodha modify_order response missing order_id: {response}")
+        return modified_id
+
+    def get_trades(self):
+        response = self._request_json("GET", "/trades")
+        return response.get("data", [])
