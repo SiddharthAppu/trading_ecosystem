@@ -4,6 +4,12 @@ This document tracks upcoming features, improvements, and bugs to address in the
 
 
 ## 🎯 High Priority
+- [ ] **Astra Standalone Desktop Kit (MVP Freeze)**: Package a deployable Astra bundle that can be copied to any desktop path, configured in-place, and launched without workspace-relative assumptions.
+- [x] **Astra Live Paper Launcher (2026-04-28)**: Added `scripts/start_strategy_runtime_live_paper.ps1` with env loading, live-paper defaults (`feed_source=broker`, `trading_provider=paper`), auth-dir preflight warning, and path-agnostic runtime startup.
+- [x] **Astra Tick Capture to File (2026-04-28)**: Added `scripts/start_upstox_tick_capture_file.ps1` wrapper for Upstox `full` mode with ATM ± strike window control; `quick_live_recorder.py` now explicitly reports flat-file spooling to `logs/ticks/` and supports `--max-symbols` throttling.
+- [ ] **Astra EOD Manual Import Utility**: Add a script that imports captured tick files into DB on demand after market close, independent from runtime execution.
+- [ ] **Astra Strategy V1 (NIFTY Trend Options, Paper Only)**: Implement a 5-minute trend-following strategy on NIFTY50 that selects the closest premium-to-200 option strike (CE/PE), enters paper trades, and exits at fixed 2:1 reward:risk.
+- [ ] **Astra Strategy Reason Log**: Emit a human-readable strategy decision log (`.txt`) that records trend checks, strike selection rationale, entry, SL, target, and exit reasons.
 - [ ] **Astra Self-Heal Supervisor**: Poll broker positions and order book on a fixed cadence, compare against runtime memory, and emit recovery actions plus Telegram alerts on drift.
 - [ ] **Astra Journal Recovery**: Rebuild positions, pending orders, and basket state from `journal.jsonl` during startup before strategy execution resumes.
 - [ ] **Astra Broker Capability Parity**: Implement the expanded `BrokerAdapter` account-query methods consistently across Fyers and Upstox, not only Zerodha.

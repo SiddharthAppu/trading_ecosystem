@@ -121,25 +121,72 @@ class UpstoxAdapter(BrokerAdapter):
         self._persist_token(access_token)
         return access_token
 
+    def _aggregate_candles(self, candles: list[list], minutes: int) -> list[list]:
+        if minutes <= 1 or not candles:
+            return candles
+
+        # Upstox returns newest-first in some endpoints. Normalize to oldest-first first.
+        candles = sorted(candles, key=lambda row: int(row[0]))
+
+        bucket_sec = minutes * 60
+        aggregated: list[list] = []
+        current_bucket = None
+        current = None
+
+        for row in candles:
+            if len(row) < 6:
+                continue
+            ts = int(row[0])
+            o = float(row[1])
+            h = float(row[2])
+            l = float(row[3])
+            c = float(row[4])
+            v = float(row[5])
+
+            bucket = (ts // bucket_sec) * bucket_sec
+            if current_bucket is None or bucket != current_bucket:
+                if current is not None:
+                    aggregated.append(current)
+                current_bucket = bucket
+                current = [bucket, o, h, l, c, v]
+                continue
+
+            current[2] = max(float(current[2]), h)
+            current[3] = min(float(current[3]), l)
+            current[4] = c
+            current[5] = float(current[5]) + v
+
+        if current is not None:
+            aggregated.append(current)
+
+        return aggregated
+
     def get_historical_data(self, symbol: str, start_date: str, end_date: str, resolution: str = "1"):
         from datetime import timedelta
         instrument_key = UPSTOX_UNDERLYING_KEYS.get(symbol, symbol)
-        interval_map = {
-            "1": "1minute",
-            "1m": "1minute",
-            "5": "5minute",
-            "5m": "5minute",
-            "10": "10minute",
-            "10m": "10minute",
-            "15": "15minute",
-            "15m": "15minute",
-            "30": "30minute",
-            "30m": "30minute",
-            "D": "day",
-            "1d": "day",
-            "day": "day",
-        }
-        interval = interval_map.get(str(resolution).strip().lower(), "day")
+        resolution_key = str(resolution).strip().lower()
+        interval = "day"
+        aggregate_minutes = 1
+
+        if resolution_key in {"1", "1m"}:
+            interval = "1minute"
+            aggregate_minutes = 1
+        elif resolution_key in {"5", "5m"}:
+            # Upstox does not support 5minute directly; derive from 1minute.
+            interval = "1minute"
+            aggregate_minutes = 5
+        elif resolution_key in {"10", "10m"}:
+            interval = "1minute"
+            aggregate_minutes = 10
+        elif resolution_key in {"15", "15m"}:
+            interval = "1minute"
+            aggregate_minutes = 15
+        elif resolution_key in {"30", "30m"}:
+            interval = "30minute"
+            aggregate_minutes = 1
+        elif resolution_key in {"d", "1d", "day"}:
+            interval = "day"
+            aggregate_minutes = 1
 
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
@@ -181,7 +228,7 @@ class UpstoxAdapter(BrokerAdapter):
 
         print("\n[SUCCESS] Download stream complete.")
         normalized.sort(key=lambda x: x[0])
-        return normalized
+        return self._aggregate_candles(normalized, aggregate_minutes)
 
     def get_quotes(self, symbols: list[str]):
         if not symbols: return []

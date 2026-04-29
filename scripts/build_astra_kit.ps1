@@ -28,13 +28,20 @@ $copyItems = @(
     @{ Source = "services\strategy_runtime"; Target = "services\strategy_runtime" },
     @{ Source = "packages\trading_core"; Target = "packages\trading_core" },
     @{ Source = "config\strategy_runtime.paper_replay.env.example"; Target = "config\strategy_runtime.paper_replay.env.example" },
+    @{ Source = "config\strategy_runtime.paper_live.env.example"; Target = "config\strategy_runtime.paper_live.env.example" },
+    @{ Source = "config\strategy_runtime.paper_live.env"; Target = "config\strategy_runtime.paper_live.env"; Optional = $true },
     @{ Source = "config\strategy_runtime.paper_replay.env"; Target = "config\strategy_runtime.paper_replay.env"; Optional = $true },
     @{ Source = "config\strategy_runtime.ema_cross.paper_replay.env"; Target = "config\strategy_runtime.ema_cross.paper_replay.env"; Optional = $true },
     @{ Source = "scripts\start_strategy_runtime_paper_replay.ps1"; Target = "scripts\start_strategy_runtime_paper_replay.ps1" },
+    @{ Source = "scripts\start_strategy_runtime_live_paper.ps1"; Target = "scripts\start_strategy_runtime_live_paper.ps1" },
+    @{ Source = "scripts\start_upstox_tick_capture_file.ps1"; Target = "scripts\start_upstox_tick_capture_file.ps1" },
+    @{ Source = "scripts\authenticate_broker.py"; Target = "scripts\authenticate_broker.py" },
+    @{ Source = "scripts\lib\quick_live_recorder.py"; Target = "scripts\lib\quick_live_recorder.py" },
     @{ Source = "services\strategy_runtime\astra-kit-requirements.txt"; Target = "services\strategy_runtime\astra-kit-requirements.txt" },
     @{ Source = "Astra_LLD.md"; Target = "docs\Astra_LLD.md" },
     @{ Source = "Astra_Requirements.md"; Target = "docs\Astra_Requirements.md" },
-    @{ Source = "Astra_Requirements_v1.md"; Target = "docs\Astra_Requirements_v1.md" }
+    @{ Source = "Astra_Requirements_v1.md"; Target = "docs\Astra_Requirements_v1.md" },
+    @{ Source = "Astra_UserGuide.md"; Target = "docs\Astra_UserGuide.md" }
 )
 
 function Invoke-Step {

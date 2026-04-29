@@ -99,6 +99,13 @@ async def events(limit: int = Query(default=100, ge=1, le=500)) -> dict:
     return {"events": runtime.get_recent_events(limit=limit)}
 
 
+@app.get("/broker/status")
+async def broker_status() -> dict:
+    """Live account snapshot from the trading adapter: funds, open positions, pending orders."""
+    runtime = _get_runtime()
+    return await runtime.get_broker_status()
+
+
 @app.post("/runtime/start")
 async def start_runtime() -> dict:
     runtime = _get_runtime()

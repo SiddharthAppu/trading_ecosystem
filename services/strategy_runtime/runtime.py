@@ -278,7 +278,12 @@ class StrategyRuntime:
         # Setup Adapters
         self.data_adapter = get_adapter(settings.provider)
         self.trading_provider = settings.trading_provider or settings.provider
-        self.trading_adapter = get_adapter(self.trading_provider)
+        # "paper" is an execution mode, not a broker adapter.
+        # In paper mode we still use the configured market-data adapter (for quotes/status).
+        if self.trading_provider == "paper":
+            self.trading_adapter = self.data_adapter
+        else:
+            self.trading_adapter = get_adapter(self.trading_provider)
         
         # Setup Executor
         if self.trading_provider == "paper":
@@ -561,6 +566,38 @@ class StrategyRuntime:
             return []
         return list(self._recent_events)[-limit:]
 
+    async def get_broker_status(self) -> dict[str, Any]:
+        """Fetch live account data from the trading adapter (funds, positions, orders).
+        Returns a best-effort dict; each key is None if the adapter does not support it
+        or the call fails.
+        """
+        adapter = self.trading_adapter
+        result: dict[str, Any] = {
+            "provider": self.trading_provider,
+            "funds": None,
+            "positions": None,
+            "orders": None,
+            "error": None,
+        }
+        errors: list[str] = []
+
+        async def _call(key: str, fn, *args):
+            try:
+                value = await asyncio.to_thread(fn, *args)
+                result[key] = value
+            except NotImplementedError:
+                pass  # adapter doesn't support this method — leave as None
+            except Exception as exc:
+                errors.append(f"{key}: {exc}")
+
+        await _call("funds", adapter.get_available_funds)
+        await _call("positions", adapter.get_portfolio_status)
+        await _call("orders", adapter.get_orders)
+
+        if errors:
+            result["error"] = "; ".join(errors)
+        return result
+
     async def _publish_market_event(self, bar: Bar) -> None:
         self._latest_price_by_symbol[bar.symbol] = bar.close
         await bus.publish(BarEvent(bar=bar))
@@ -611,6 +648,26 @@ class StrategyRuntime:
             )
         )
 
+    async def _recover_from_journal(self) -> None:
+        """Replay ORDER_FILL entries from journal to restore portfolio state on restart."""
+        fills = self.journal.recover_state()
+        if not fills:
+            return
+        logger.info("Journal recovery: replaying %d fill(s) into portfolio", len(fills))
+        for fill in fills:
+            symbol = fill["symbol"]
+            side_raw = fill["side"].upper()
+            qty = fill["quantity"]
+            price = fill["price"]
+            if not symbol or qty <= 0 or price <= 0:
+                continue
+            try:
+                side = Side.BUY if side_raw == "BUY" else Side.SELL
+                self.portfolio.update_position(symbol, qty, price, side)
+            except Exception as exc:
+                logger.warning("Journal recovery: skipped fill %s — %s", fill, exc)
+        logger.info("Journal recovery complete. Portfolio positions: %s", list(self.portfolio.positions.keys()))
+
     async def run(self) -> None:
         requires_auth = self.settings.feed_source != "replay_ws"
         if requires_auth:
@@ -625,6 +682,10 @@ class StrategyRuntime:
         self._latest_error = ""
         self.strategy.on_init()
         self.strategy.on_start()
+
+        # Restore portfolio from journal before entering the main loop
+        await self._recover_from_journal()
+
         self._record_event(
             "runtime_start",
             {
@@ -641,33 +702,53 @@ class StrategyRuntime:
             )
         )
 
-        try:
-            while self._running:
-                bars = await self.feed.fetch()
-                if bars:
-                    snapshot = self._snapshot_from_bars(bars)
-                    self._latest_snapshot = snapshot
-                    await self.strategy.evaluate_snapshot(snapshot)
-                    await self._publish_market_event(snapshot.bar)
-                    await self._apply_position_risk(snapshot)
-                if self.settings.feed_source != "replay_ws":
-                    await asyncio.sleep(self.settings.polling_interval_seconds)
-                elif getattr(self.feed, "completed", False) and not bars:
-                    logger.info("Replay feed completed; stopping runtime loop")
-                    break
-        except Exception as exc:
-            self._latest_error = str(exc)
-            self._record_event("runtime_error", {"error": str(exc)})
-            await self.notifier.send(
-                NotificationMessage(
-                    title="Strategy runtime error",
-                    body=str(exc),
-                    level="warning",
+        # Self-heal supervisor: restart inner loop on transient errors with backoff.
+        MAX_RESTARTS = 5
+        restart_count = 0
+        backoff = 5  # seconds
+
+        while self._running:
+            try:
+                await self._run_inner_loop()
+                # Clean exit (replay completed or stop() called) — do not restart.
+                break
+            except Exception as exc:
+                self._latest_error = str(exc)
+                self._record_event("runtime_error", {"error": str(exc), "restart_count": restart_count})
+                logger.exception("Runtime loop error (restart %d/%d): %s", restart_count, MAX_RESTARTS, exc)
+                await self.notifier.send(
+                    NotificationMessage(
+                        title="Strategy runtime error",
+                        body=f"[{restart_count}/{MAX_RESTARTS}] {exc}",
+                        level="warning",
+                    )
                 )
-            )
-            raise
-        finally:
-            self._running = False
+                if restart_count >= MAX_RESTARTS:
+                    logger.error("Max restarts (%d) reached — runtime halted.", MAX_RESTARTS)
+                    self._running = False
+                    break
+                restart_count += 1
+                sleep_secs = backoff * restart_count
+                logger.info("Restarting runtime loop in %ds …", sleep_secs)
+                await asyncio.sleep(sleep_secs)
+
+        self._running = False
+
+    async def _run_inner_loop(self) -> None:
+        """Core market-data loop. Exits cleanly on stop() or replay completion."""
+        while self._running:
+            bars = await self.feed.fetch()
+            if bars:
+                snapshot = self._snapshot_from_bars(bars)
+                self._latest_snapshot = snapshot
+                await self.strategy.evaluate_snapshot(snapshot)
+                await self._publish_market_event(snapshot.bar)
+                await self._apply_position_risk(snapshot)
+            if self.settings.feed_source != "replay_ws":
+                await asyncio.sleep(self.settings.polling_interval_seconds)
+            elif getattr(self.feed, "completed", False) and not bars:
+                logger.info("Replay feed completed; stopping runtime loop")
+                break
 
 
 def create_runtime(settings: RuntimeSettings) -> StrategyRuntime:

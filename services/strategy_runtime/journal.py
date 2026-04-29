@@ -61,3 +61,40 @@ class JournalManager:
 
     async def log_fill(self, symbol: str, fill_data: Dict[str, Any], basket_id: str = "none"):
         await self.log_event("ORDER_FILL", symbol, fill_data, basket_id=basket_id)
+
+    def recover_state(self) -> list[Dict[str, Any]]:
+        """
+        Read the journal file and return all ORDER_FILL entries in chronological order.
+        Returns an empty list if the journal does not exist or is unreadable.
+        Each returned dict has keys: symbol, side, quantity, price, order_id, filled_at.
+        """
+        if not self.path.exists():
+            return []
+        fills: list[Dict[str, Any]] = []
+        try:
+            with open(self.path, "r", encoding="utf-8") as fh:
+                for line_num, raw_line in enumerate(fh, start=1):
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        logger.warning("Journal line %d is not valid JSON — skipped", line_num)
+                        continue
+                    if entry.get("event") != "ORDER_FILL":
+                        continue
+                    data = entry.get("data", {})
+                    fills.append(
+                        {
+                            "symbol": entry.get("symbol", ""),
+                            "side": data.get("side", ""),
+                            "quantity": int(data.get("quantity", 0)),
+                            "price": float(data.get("price", 0.0)),
+                            "order_id": data.get("order_id", ""),
+                            "filled_at": data.get("filled_at", entry.get("ts", "")),
+                        }
+                    )
+        except OSError as exc:
+            logger.error("Could not read journal for recovery: %s", exc)
+        return fills
