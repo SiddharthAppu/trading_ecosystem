@@ -1,11 +1,13 @@
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
-from typing import Dict, Any, Optional
-from trading_core.models import Order, Fill, Side, OrderStatus
-from trading_core.events import OrderEvent, FillEvent, bus, EventType
+from typing import Dict
+
+from trading_core.models import Order, Fill, OrderStatus
+from trading_core.events import OrderEvent, FillEvent, bus
 from trading_core.providers.base import BrokerAdapter
+
+from services.strategy_runtime.time_utils import now_ist
 
 logger = logging.getLogger("astra.executor")
 
@@ -28,18 +30,18 @@ class PaperExecutor(BaseExecutor):
         self.capital = initial_capital
 
     async def execute_order(self, order: Order):
-        logger.info(f"Paper executing {order.side} {order.quantity} {order.symbol}")
-        
+        logger.info("Paper executing %s %s %s", order.side, order.quantity, order.symbol)
+
         # Simulate a fill
         fill = Fill(
             order_id=order.order_id,
             symbol=order.symbol,
             side=order.side,
             quantity=order.quantity,
-            price=order.price or 0.0, # Strategy should provide price or engine will fill it
-            filled_at=datetime.now(timezone.utc)
+            price=order.price or 0.0,
+            filled_at=order.created_at if order.created_at else now_ist(),
         )
-        
+
         order.status = OrderStatus.FILLED
         await bus.publish(FillEvent(fill=fill))
 
@@ -50,31 +52,109 @@ class LiveExecutor(BaseExecutor):
         self.adapter = adapter
 
     async def execute_order(self, order: Order):
-        logger.info(f"Live executing {order.side} {order.quantity} {order.symbol} on {self.adapter.provider_name}")
-        
+        logger.info(
+            "Live executing %s %s %s on %s",
+            order.side,
+            order.quantity,
+            order.symbol,
+            self.adapter.provider_name,
+        )
+
+        loop = asyncio.get_event_loop()
         try:
-            # Place order on broker
-            broker_order_id = self.adapter.place_order(
-                symbol=order.symbol,
-                side=order.side.value,
-                quantity=order.quantity,
-                order_type="MARKET", # Default to market for now
-                price=order.price,
-                tag=order.tag
+            # Place order on broker (sync call, run in thread to avoid blocking event loop)
+            broker_order_id = await loop.run_in_executor(
+                None,
+                lambda: self.adapter.place_order(
+                    symbol=order.symbol,
+                    side=order.side.value,
+                    quantity=order.quantity,
+                    order_type="MARKET",
+                    price=order.price,
+                    tag=order.tag,
+                ),
             )
-            
-            order.order_id = broker_order_id # Update with real ID if possible
-            order.status = OrderStatus.PLACED
-            
-            # Note: In a real system, we'd wait for a WebSocket execution report.
-            # For Astra lightweight, we'll poll or assume fill for Market orders 
-            # if the broker API doesn't provide an instant status.
-            # But here we'll just log it. The FillEvent should ideally come from 
-            # a separate Poller or WebSocket listener in StrategyRuntime.
-            
-            logger.info(f"Order placed on {self.adapter.provider_name}: {broker_order_id}")
-            
-        except Exception as e:
-            logger.error(f"Live execution failed: {e}")
+
+            order.order_id = broker_order_id
+            order.status = OrderStatus.SUBMITTED
+            logger.info("Order placed on %s: broker_order_id=%s", self.adapter.provider_name, broker_order_id)
+
+            # Poll for fill confirmation.  MARKET orders on Zerodha typically
+            # fill within 1–2 seconds during market hours.
+            fill = await self._poll_for_fill(order, broker_order_id, loop)
+            if fill is not None:
+                order.status = OrderStatus.FILLED
+                await bus.publish(FillEvent(fill=fill))
+            else:
+                logger.warning(
+                    "Fill confirmation timed out for broker_order_id=%s; order left as SUBMITTED",
+                    broker_order_id,
+                )
+
+        except Exception as exc:
+            logger.error("Live execution failed: %s", exc)
             order.status = OrderStatus.REJECTED
-            # Optionally publish a rejection event
+
+    async def _poll_for_fill(
+        self,
+        order: Order,
+        broker_order_id: str,
+        loop: asyncio.AbstractEventLoop,
+        initial_delay: float = 2.0,
+        retry_delay: float = 1.5,
+        max_retries: int = 6,
+    ):
+        """Poll broker for order status until COMPLETE or max_retries exhausted.
+
+        Returns a Fill on success, or None on timeout/rejection.
+        """
+        await asyncio.sleep(initial_delay)
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                broker_status = await loop.run_in_executor(
+                    None,
+                    lambda: self.adapter.get_order_status(broker_order_id),
+                )
+            except Exception as exc:
+                logger.warning("get_order_status attempt %d failed: %s", attempt, exc)
+                await asyncio.sleep(retry_delay)
+                continue
+
+            if broker_status is None:
+                logger.warning("Order %s not found in broker order book (attempt %d)", broker_order_id, attempt)
+                await asyncio.sleep(retry_delay)
+                continue
+
+            status = str(broker_status.get("status", "")).upper()
+            logger.info("Poll attempt %d: broker_order_id=%s status=%s", attempt, broker_order_id, status)
+
+            if status == "COMPLETE":
+                avg_price = float(broker_status.get("average_price") or order.price or 0.0)
+                filled_qty = int(broker_status.get("filled_quantity") or order.quantity)
+                filled_at_raw = broker_status.get("exchange_update_timestamp") or broker_status.get("order_timestamp")
+                from services.strategy_runtime.time_utils import parse_iso_to_ist
+                filled_at = parse_iso_to_ist(str(filled_at_raw)) if filled_at_raw else now_ist()
+                return Fill(
+                    order_id=order.order_id,
+                    symbol=order.symbol,
+                    side=order.side,
+                    quantity=filled_qty,
+                    price=avg_price,
+                    filled_at=filled_at,
+                )
+
+            if status in ("REJECTED", "CANCELLED"):
+                logger.error(
+                    "Order %s %s by broker: %s",
+                    broker_order_id,
+                    status,
+                    broker_status.get("status_message", ""),
+                )
+                order.status = OrderStatus.REJECTED
+                return None
+
+            # Still OPEN/TRIGGER PENDING — wait and retry
+            await asyncio.sleep(retry_delay)
+
+        return None

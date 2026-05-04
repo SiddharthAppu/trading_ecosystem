@@ -42,5 +42,16 @@ This file serves as the permanent brain of the `trading_ecosystem` monorepo. It 
 - **Orchestration Rule**: The `run_daily_capture_eod_workflow.ps1` script is designed to detect this. If you see `[WARN] Port 8080 not responding yet`, ensure Docker is running and the `trading_timescaledb` container is healthy before restarting the workflow.
 - **Token Persistence**: Tokens refreshed during a failed run ARE saved to `config/auth/` and will be automatically picked up by the next successful service start.
 
+## 🚀 Astra Strategy Runtime (Zero-DB Cloud Executor)
+- **Split-Provider Architecture**: Astra explicitly supports a dual-broker model. It can ingest data/ticks from one provider (e.g., `STRATEGY_RUNTIME_PROVIDER=upstox`) while routing orders to another (e.g., `STRATEGY_RUNTIME_TRADING_PROVIDER=zerodha`).
+- **Zero-DB Resilience**: Astra is designed for cloud-native, DB-less execution.
+  - **Durable Journaling**: Instead of relying on a live database, it uses `JournalManager` to append every event (`INDICATOR_PASSED`, `ORDER_PLACED`, `ORDER_FILL`) to a local `journal.jsonl` file.
+  - **Tick-to-File Capture**: Real-time market ticks (including `OI`, `Delta`, `Theta`) are streamed directly to symbol-specific CSV files for EOD synchronization.
+  - **State Reconstruction**: On boot, Astra is capable of rebuilding its entire in-memory Portfolio state by replaying the local JSONL journal.
+- **Execution Logic**:
+  - **PaperExecutor**: Local simulation for testing strategies without financial risk.
+  - **LiveExecutor**: Interacts directly with the configured `trading_adapter` to place real market orders.
+- **Basket Tracking**: Every signal and order can be tagged with a `basket_id`, allowing Astra to track multi-leg strategies (like Iron Condors) as single atomic units in the journal.
+
 ---
 *(Auto-updated sequentially by the Agent to enforce continuity)*

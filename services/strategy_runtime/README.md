@@ -1,5 +1,9 @@
 Strategy runtime is a separate backend service for signal generation and paper execution.
 
+Architecture diagrams:
+
+- services/strategy_runtime/ARCHITECTURE_DIAGRAMS.md
+
 Strategy scaffold (folder per strategy):
 
 - services/strategy_runtime/strategies/<strategy_name>/strategy.py with class StrategyImpl

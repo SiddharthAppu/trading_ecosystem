@@ -15,10 +15,19 @@ def get_default_params() -> dict:
         "strike_scan_count": int(os.getenv("NIFTY_STRIKE_SCAN_COUNT", "10")),
         # Target option premium for entry selection (Rs)
         "target_premium": float(os.getenv("NIFTY_TARGET_PREMIUM", "200.0")),
-        # Tolerance around target_premium: any strike within ±tolerance is eligible
+        # Tolerance around target_premium: any strike within +-tolerance is eligible
         "premium_tolerance": float(os.getenv("NIFTY_PREMIUM_TOLERANCE", "50.0")),
-        # Risk per trade as fraction of entry premium (e.g. 0.5 → risk = 50% of entry)
+        # Risk per trade as fraction of entry premium (e.g. 0.5 -> risk = 50% of entry)
         "stop_loss_premium_pct": float(os.getenv("NIFTY_STOP_LOSS_PREMIUM_PCT", "0.50")),
         # Provider to call for live option quotes (must match STRATEGY_RUNTIME_PROVIDER)
         "provider": os.getenv("STRATEGY_RUNTIME_PROVIDER", "upstox"),
+        # Indicator periods
+        # The LOGIC of each signal (EMA > SMA, MACD line > 0) is fixed in strategy.py.
+        # These numbers tune HOW SENSITIVE those indicators are. They belong in env,
+        # not in code, so they can be changed without touching strategy logic.
+        "ema_period": int(os.getenv("NIFTY_EMA_PERIOD", "20")),
+        "sma_period": int(os.getenv("NIFTY_SMA_PERIOD", "20")),
+        "macd_fast": int(os.getenv("NIFTY_MACD_FAST", "12")),
+        "macd_slow": int(os.getenv("NIFTY_MACD_SLOW", "26")),
+        "macd_signal": int(os.getenv("NIFTY_MACD_SIGNAL", "9")),
     }

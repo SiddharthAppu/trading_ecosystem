@@ -3,11 +3,31 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from dotenv import load_dotenv
+
+
+def _load_global_env() -> None:
+    """Load central config/.env so shared secrets do not need per-strategy duplication."""
+    config_dir = os.getenv("TRADING_CONFIG_DIR", os.path.join(os.getcwd(), "config"))
+    env_file = os.path.join(config_dir, ".env")
+    if os.path.exists(env_file):
+        load_dotenv(env_file, override=False)
+
+
+_load_global_env()
+
 
 def _parse_csv(raw_value: str, default: list[str]) -> list[str]:
     if not raw_value:
         return default
     return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
+def _parse_indicator_input_mode(raw_value: str | None) -> str:
+    value = (raw_value or "bars_1m").strip().lower()
+    if value in {"bars_1m", "ticks"}:
+        return value
+    return "bars_1m"
 
 
 @dataclass(slots=True)
@@ -28,6 +48,8 @@ class RuntimeSettings:
     stop_loss_pct: float = 0.01
     trailing_stop_pct: float = 0.015
     indicators: list[str] = field(default_factory=lambda: ["ema_20", "sma_20", "rsi_14", "macd"])
+    indicator_input_mode: str = "bars_1m"
+    telegram_enabled: bool = False
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     log_level: str = "INFO"
@@ -61,6 +83,10 @@ class RuntimeSettings:
                 os.getenv("STRATEGY_RUNTIME_INDICATORS", "ema_20,sma_20,rsi_14,macd"),
                 ["ema_20", "sma_20", "rsi_14", "macd"],
             ),
+            indicator_input_mode=_parse_indicator_input_mode(
+                os.getenv("STRATEGY_RUNTIME_INDICATOR_INPUT_MODE", "bars_1m")
+            ),
+            telegram_enabled=os.getenv("TELEGRAM_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
             log_level=os.getenv("STRATEGY_RUNTIME_LOG_LEVEL", "INFO").strip().upper(),

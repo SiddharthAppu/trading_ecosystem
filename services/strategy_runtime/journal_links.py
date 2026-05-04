@@ -4,10 +4,11 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
+
+from services.strategy_runtime.time_utils import parse_iso_to_ist
 
 logger = logging.getLogger("strategy_runtime.journal_links")
 
@@ -67,16 +68,7 @@ def timeframe_to_tradingview_interval(timeframe: str) -> str:
 
 
 def _iso_utc(value: str | None) -> str:
-    if not value:
-        return datetime.now(timezone.utc).isoformat()
-    normalized = str(value).strip().replace("Z", "+00:00")
-    try:
-        dt = datetime.fromisoformat(normalized)
-    except ValueError:
-        return datetime.now(timezone.utc).isoformat()
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).isoformat()
+    return parse_iso_to_ist(value)
 
 
 def _clean_symbol(raw_symbol: str) -> str:

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime
 import websockets
 from aiohttp import web
 from trading_core.db import DatabaseManager
@@ -53,6 +54,26 @@ def _supports_timeframe_aggregation(data_type: str) -> bool:
     return data_type in ("ohlcv_1m", "ohlcv_1min_from_ticks")
 
 
+def _parse_optional_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+
+    text = value.strip()
+    if not text:
+        return None
+
+    # Accept trailing Z by normalizing to +00:00 for fromisoformat.
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid datetime '{value}'. Use ISO format like 2026-04-15T09:15:00+05:30"
+        ) from exc
+
+
 
 
 def _cors_headers() -> dict[str, str]:
@@ -70,8 +91,8 @@ async def fetch_historical_series(
     symbol: str,
     provider: str = "fyers",
     data_type: str = "options_ohlc",
-    start_time: str = None,
-    end_time: str = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
     timeframe: str = "1m",
 ):
     """
@@ -81,8 +102,8 @@ async def fetch_historical_series(
         symbol: Trading symbol
         provider: "fyers" or "upstox"
         data_type: "market_ticks", "ohlcv_1m", "ohlcv_1min_from_ticks", or "options_ohlc"
-        start_time: ISO format start time (optional)
-        end_time: ISO format end time (optional)
+        start_time: datetime start time (optional)
+        end_time: datetime end time (optional)
     """
     pool = await DatabaseManager.get_pool()
     table = get_table_name(data_type, provider)
@@ -187,12 +208,14 @@ async def replay_handler(websocket):
             print(f"  Time range: {start_time or 'start'} to {end_time or 'end'}")
         
         try:
+            start_time_dt = _parse_optional_iso_datetime(start_time)
+            end_time_dt = _parse_optional_iso_datetime(end_time)
             data = await fetch_historical_series(
                 symbol,
                 provider,
                 data_type,
-                start_time,
-                end_time,
+                start_time_dt,
+                end_time_dt,
                 timeframe,
             )
         except Exception as e:
@@ -257,12 +280,14 @@ async def load_replay_handler(request: web.Request) -> web.Response:
         return _json_cors({"error": str(e)}, status=400)
 
     try:
+        start_time_dt = _parse_optional_iso_datetime(start_time)
+        end_time_dt = _parse_optional_iso_datetime(end_time)
         rows = await fetch_historical_series(
             symbol=symbol,
             provider=provider,
             data_type=data_type,
-            start_time=start_time,
-            end_time=end_time,
+            start_time=start_time_dt,
+            end_time=end_time_dt,
             timeframe=timeframe,
         )
     except Exception as e:

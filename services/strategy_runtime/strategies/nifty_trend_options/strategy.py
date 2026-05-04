@@ -144,10 +144,12 @@ class StrategyImpl(Strategy):
         qty = int(self.ctx.get_param("quantity", 1))
         scan_count = int(self.ctx.get_param("strike_scan_count", 10))
         configured_expiry = self.ctx.get_param("option_expiry", "")
+        resolver = getattr(self.ctx, "market_data_resolver", None)
+        as_of_time = snapshot.bar.timestamp
 
         # --- 1. If we have an open option position, check exit first ---
         if self._option_symbol is not None:
-            await self._check_exit(provider, qty)
+            await self._check_exit(provider, as_of_time)
             return
 
         # --- 2. No open position — check trend ---
@@ -168,20 +170,25 @@ class StrategyImpl(Strategy):
 
         # --- 3. Fetch option chain and find near-target-premium strike ---
         try:
-            adapter = get_adapter(provider)
-        except Exception as exc:
-            _log_decision(f"ERROR getting adapter '{provider}': {exc}")
-            return
+            if resolver is not None:
+                expiry_date = configured_expiry or await resolver.nearest_expiry(underlying, as_of_time)
+                chain_data = await resolver.get_option_chain_symbols(
+                    underlying,
+                    expiry_date,
+                    scan_count,
+                    as_of_time,
+                    spot_hint=float(snapshot.bar.close),
+                )
+            else:
+                adapter = get_adapter(provider)
+                expiry_date = configured_expiry or await asyncio.to_thread(_nearest_expiry, adapter, underlying)
+                chain_data = await asyncio.to_thread(
+                    _fetch_option_quotes, adapter, underlying, expiry_date, scan_count
+                )
 
-        try:
-            expiry_date = configured_expiry or await asyncio.to_thread(_nearest_expiry, adapter, underlying)
             if not expiry_date:
                 _log_decision("ERROR: No expiry available from adapter")
                 return
-
-            chain_data = await asyncio.to_thread(
-                _fetch_option_quotes, adapter, underlying, expiry_date, scan_count
-            )
         except Exception as exc:
             _log_decision(f"ERROR fetching option chain: {exc}")
             return
@@ -194,9 +201,12 @@ class StrategyImpl(Strategy):
             _log_decision(f"ERROR: No {direction} symbols in chain for expiry {expiry_date}")
             return
 
-        # Fetch live quotes for all candidate option symbols
+        # Fetch candidate option quotes
         try:
-            quotes = await asyncio.to_thread(_fetch_quotes, adapter, option_symbols)
+            if resolver is not None:
+                quotes = await resolver.get_quotes(option_symbols, as_of_time)
+            else:
+                quotes = await asyncio.to_thread(_fetch_quotes, adapter, option_symbols)
         except Exception as exc:
             _log_decision(f"ERROR fetching option quotes: {exc}")
             return
@@ -249,7 +259,7 @@ class StrategyImpl(Strategy):
     # Exit check — called when we have an open position
     # ------------------------------------------------------------------
 
-    async def _check_exit(self, provider: str, qty: int) -> None:
+    async def _check_exit(self, provider: str, as_of_time=None) -> None:
         if self._option_symbol is None:
             return
 
@@ -262,8 +272,12 @@ class StrategyImpl(Strategy):
 
         # Fetch current price
         try:
-            adapter = get_adapter(provider)
-            quotes = await asyncio.to_thread(_fetch_quotes, adapter, [self._option_symbol])
+            resolver = getattr(self.ctx, "market_data_resolver", None)
+            if resolver is not None and as_of_time is not None:
+                quotes = await resolver.get_quotes([self._option_symbol], as_of_time)
+            else:
+                adapter = get_adapter(provider)
+                quotes = await asyncio.to_thread(_fetch_quotes, adapter, [self._option_symbol])
             current_price = quotes[0].get("last_price") if quotes else None
         except Exception as exc:
             _log_decision(f"ERROR fetching exit quote for {self._option_symbol}: {exc}")

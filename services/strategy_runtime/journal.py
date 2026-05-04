@@ -1,9 +1,10 @@
 import json
 import asyncio
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
+
+from services.strategy_runtime.time_utils import now_ist, parse_iso_to_ist
 
 logger = logging.getLogger("astra.journal")
 
@@ -35,10 +36,12 @@ class JournalManager:
             self._ensure_dir()
             self._initialized = True
 
-        write_ts = datetime.now(timezone.utc).isoformat()
+        write_ts = now_ist().isoformat()
+        resolved_event_ts = parse_iso_to_ist(event_ts) if event_ts else write_ts
         entry = {
-            "ts": write_ts,
-            "event_ts": event_ts or write_ts,
+            "ts": resolved_event_ts,
+            "event_ts": resolved_event_ts,
+            "logged_at": write_ts,
             "event": event_type,
             "strategy": self.strategy_name,
             "timeframe": self.timeframe,
@@ -65,8 +68,14 @@ class JournalManager:
             "action": action
         }, basket_id=basket_id)
 
-    async def log_order(self, symbol: str, order_data: Dict[str, Any], basket_id: str = "none"):
-        await self.log_event("ORDER_PLACED", symbol, order_data, basket_id=basket_id)
+    async def log_order(
+        self,
+        symbol: str,
+        order_data: Dict[str, Any],
+        basket_id: str = "none",
+        event_ts: str | None = None,
+    ):
+        await self.log_event("ORDER_PLACED", symbol, order_data, basket_id=basket_id, event_ts=event_ts)
 
     async def log_fill(self, symbol: str, fill_data: Dict[str, Any], basket_id: str = "none"):
         await self.log_event(

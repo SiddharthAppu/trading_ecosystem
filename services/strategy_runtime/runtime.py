@@ -24,13 +24,26 @@ from services.strategy_runtime.portfolio import PortfolioManager
 from services.strategy_runtime.executor import PaperExecutor, LiveExecutor
 from services.strategy_runtime.config import RuntimeSettings
 from services.strategy_runtime.notifier import CompositeNotifier, NotificationMessage
+from services.strategy_runtime.replay_option_data import ReplayOptionDataResolver
 from services.strategy_runtime.strategies import load_strategy, load_strategy_params
 from services.strategy_runtime.journal import JournalManager
+from services.strategy_runtime.time_utils import isoformat_ist, now_ist
 
 import websockets
 
 
 logger = logging.getLogger("strategy_runtime.runtime")
+
+
+def _timeframe_to_minutes(timeframe: str) -> int:
+    mapping = {"1m": 1, "5m": 5, "10m": 10}
+    return mapping.get(timeframe, 1)
+
+
+def _bucket_start(timestamp: datetime, minutes: int) -> datetime:
+    truncated = timestamp.replace(second=0, microsecond=0)
+    bucket_minute = (truncated.minute // minutes) * minutes
+    return truncated.replace(minute=bucket_minute)
 
 
 @dataclass(slots=True)
@@ -85,6 +98,134 @@ class RuntimeRiskManager:
             return "trailing_stop"
 
         return None
+
+
+class TickToOneMinuteBarAggregator:
+    def __init__(self, symbol: str):
+        self.symbol = symbol
+        self._bucket_start: datetime | None = None
+        self._open: float = 0.0
+        self._high: float = 0.0
+        self._low: float = 0.0
+        self._close: float = 0.0
+        self._volume: int = 0
+
+    def _start_bucket(self, bucket_start: datetime, price: float, volume: int) -> None:
+        self._bucket_start = bucket_start
+        self._open = price
+        self._high = price
+        self._low = price
+        self._close = price
+        self._volume = volume
+
+    def _to_bar(self) -> Bar | None:
+        if self._bucket_start is None:
+            return None
+        return Bar(
+            symbol=self.symbol,
+            timestamp=self._bucket_start,
+            open=self._open,
+            high=self._high,
+            low=self._low,
+            close=self._close,
+            volume=self._volume,
+            timeframe="1m",
+        )
+
+    def push_tick(self, timestamp: datetime, price: float, volume: int) -> list[Bar]:
+        bucket = _bucket_start(timestamp, 1)
+        if self._bucket_start is None:
+            self._start_bucket(bucket, price, volume)
+            return []
+
+        if bucket == self._bucket_start:
+            self._high = max(self._high, price)
+            self._low = min(self._low, price)
+            self._close = price
+            self._volume += volume
+            return []
+
+        completed = self._to_bar()
+        self._start_bucket(bucket, price, volume)
+        return [completed] if completed else []
+
+    def flush(self) -> list[Bar]:
+        completed = self._to_bar()
+        self._bucket_start = None
+        self._open = 0.0
+        self._high = 0.0
+        self._low = 0.0
+        self._close = 0.0
+        self._volume = 0
+        return [completed] if completed else []
+
+    def current_bucket_start(self) -> datetime | None:
+        return self._bucket_start
+
+
+class BarTimeframeAggregator:
+    def __init__(self, symbol: str, timeframe: str, minutes: int):
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.minutes = minutes
+        self._bucket_start: datetime | None = None
+        self._open: float = 0.0
+        self._high: float = 0.0
+        self._low: float = 0.0
+        self._close: float = 0.0
+        self._volume: int = 0
+
+    def _start_bucket(self, bucket_start: datetime, bar: Bar) -> None:
+        self._bucket_start = bucket_start
+        self._open = bar.open
+        self._high = bar.high
+        self._low = bar.low
+        self._close = bar.close
+        self._volume = bar.volume
+
+    def _to_bar(self) -> Bar | None:
+        if self._bucket_start is None:
+            return None
+        return Bar(
+            symbol=self.symbol,
+            timestamp=self._bucket_start,
+            open=self._open,
+            high=self._high,
+            low=self._low,
+            close=self._close,
+            volume=self._volume,
+            timeframe=self.timeframe,
+        )
+
+    def push_bar(self, bar: Bar) -> list[Bar]:
+        bucket = _bucket_start(bar.timestamp, self.minutes)
+        if self._bucket_start is None:
+            self._start_bucket(bucket, bar)
+            return []
+
+        if bucket == self._bucket_start:
+            self._high = max(self._high, bar.high)
+            self._low = min(self._low, bar.low)
+            self._close = bar.close
+            self._volume += bar.volume
+            return []
+
+        completed = self._to_bar()
+        self._start_bucket(bucket, bar)
+        return [completed] if completed else []
+
+    def flush(self) -> list[Bar]:
+        completed = self._to_bar()
+        self._bucket_start = None
+        self._open = 0.0
+        self._high = 0.0
+        self._low = 0.0
+        self._close = 0.0
+        self._volume = 0
+        return [completed] if completed else []
+
+    def current_bucket_start(self) -> datetime | None:
+        return self._bucket_start
 
 
 class BrokerPollingBarFeed:
@@ -151,6 +292,17 @@ class ReplayWebSocketBarFeed:
         self._reader_task: asyncio.Task | None = None
         self._completed = False
         self._error: str = ""
+        self._target_minutes = _timeframe_to_minutes(self.settings.timeframe)
+        self._aggregate_ticks_to_bars = (
+            self.settings.replay_data_type == "market_ticks"
+            and self.settings.indicator_input_mode == "bars_1m"
+        )
+        self._tick_to_one_min = TickToOneMinuteBarAggregator(self.settings.symbol) if self._aggregate_ticks_to_bars else None
+        self._one_min_to_target = (
+            BarTimeframeAggregator(self.settings.symbol, self.settings.timeframe, self._target_minutes)
+            if self._aggregate_ticks_to_bars and self._target_minutes > 1
+            else None
+        )
 
     @property
     def completed(self) -> bool:
@@ -202,13 +354,53 @@ class ReplayWebSocketBarFeed:
 
         return None
 
+    def _emit_bar(self, bar: Bar) -> None:
+        self._history.append(bar)
+        if len(self._history) > self.settings.lookback_bars:
+            self._history = self._history[-self.settings.lookback_bars :]
+        self._queue.put_nowait(bar)
+
+    def _route_one_min_bar(self, one_min_bar: Bar) -> list[Bar]:
+        if not self._one_min_to_target:
+            one_min_bar.timeframe = self.settings.timeframe
+            return [one_min_bar]
+        return self._one_min_to_target.push_bar(one_min_bar)
+
+    def _ingest_tick_row(self, row: dict[str, Any]) -> list[Bar]:
+        if not self._tick_to_one_min:
+            direct = self._row_to_bar(row)
+            return [direct] if direct else []
+        if "time" not in row or "price" not in row:
+            return []
+        timestamp = self._to_datetime(str(row["time"]))
+        price = float(row["price"])
+        volume = int(row.get("volume", 0) or 0)
+        one_min_bars = self._tick_to_one_min.push_tick(timestamp, price, volume)
+        out: list[Bar] = []
+        for one_min in one_min_bars:
+            out.extend(self._route_one_min_bar(one_min))
+        return out
+
+    def _flush_aggregators(self) -> list[Bar]:
+        if not self._tick_to_one_min:
+            return []
+        out: list[Bar] = []
+        for one_min in self._tick_to_one_min.flush():
+            out.extend(self._route_one_min_bar(one_min))
+        if self._one_min_to_target:
+            out.extend(self._one_min_to_target.flush())
+        return out
+
     async def _read_stream(self) -> None:
+        requested_timeframe = (
+            "1m" if self._aggregate_ticks_to_bars else self.settings.timeframe
+        )
         config_payload: dict[str, Any] = {
             "symbol": self.settings.symbol,
             "provider": self.settings.provider,
             "data_type": self.settings.replay_data_type,
             "speed": self.settings.replay_speed,
-            "timeframe": self.settings.timeframe,
+            "timeframe": requested_timeframe,
             "indicators": self.settings.indicators,
         }
         if self.settings.replay_start_time:
@@ -225,19 +417,33 @@ class ReplayWebSocketBarFeed:
                         self._error = str(data["error"])
                         self._completed = True
                         break
+                    if data.get("status") == "no_data":
+                        self._completed = True
+                        self._error = str(data.get("message") or "No replay data found")
+                        break
                     if data.get("status") == "completed":
                         self._completed = True
                         break
                     if "status" in data:
                         continue
+                    if self._aggregate_ticks_to_bars:
+                        bars = self._ingest_tick_row(data)
+                        for bar in bars:
+                            self._emit_bar(bar)
+                    else:
+                        bar = self._row_to_bar(data)
+                        if bar is None:
+                            continue
+                        self._emit_bar(bar)
 
-                    bar = self._row_to_bar(data)
-                    if bar is None:
-                        continue
-                    self._history.append(bar)
-                    if len(self._history) > self.settings.lookback_bars:
-                        self._history = self._history[-self.settings.lookback_bars :]
-                    await self._queue.put(bar)
+                if self._aggregate_ticks_to_bars:
+                    for bar in self._flush_aggregators():
+                        self._emit_bar(bar)
+
+                # If the socket closes normally without an explicit terminal status,
+                # mark feed completed so the runtime loop can exit cleanly.
+                if not self._completed:
+                    self._completed = True
         except Exception as exc:  # noqa: BLE001
             self._error = str(exc)
             self._completed = True
@@ -245,11 +451,11 @@ class ReplayWebSocketBarFeed:
     async def fetch(self) -> list[Bar]:
         await self._ensure_started()
 
-        if self._error:
-            raise RuntimeError(f"Replay feed error: {self._error}")
-
         if self._completed and self._queue.empty():
             return []
+
+        if self._error:
+            raise RuntimeError(f"Replay feed error: {self._error}")
 
         try:
             await asyncio.wait_for(self._queue.get(), timeout=5)
@@ -259,6 +465,25 @@ class ReplayWebSocketBarFeed:
             return []
 
         return self._history[-self.settings.lookback_bars :]
+
+    def get_aggregation_status(self) -> dict[str, Any]:
+        return {
+            "enabled": self._aggregate_ticks_to_bars,
+            "indicator_input_mode": self.settings.indicator_input_mode,
+            "source_data_type": self.settings.replay_data_type,
+            "source_stream_timeframe": "1m" if self._aggregate_ticks_to_bars else self.settings.timeframe,
+            "target_timeframe": self.settings.timeframe,
+            "open_tick_bucket_start": (
+                isoformat_ist(self._tick_to_one_min.current_bucket_start())
+                if self._tick_to_one_min and self._tick_to_one_min.current_bucket_start()
+                else None
+            ),
+            "open_target_bucket_start": (
+                isoformat_ist(self._one_min_to_target.current_bucket_start())
+                if self._one_min_to_target and self._one_min_to_target.current_bucket_start()
+                else None
+            ),
+        }
 
 
 class StrategyRuntime:
@@ -277,7 +502,12 @@ class StrategyRuntime:
         self._latest_price_by_symbol: dict[str, float] = {}
         # Setup Adapters
         self.data_adapter = get_adapter(settings.provider)
-        self.trading_provider = settings.trading_provider or settings.provider
+        configured_trading_provider = settings.trading_provider or settings.provider
+        if settings.feed_source == "replay_ws":
+            # Replay runs must execute in paper mode so fills are simulated deterministically.
+            self.trading_provider = "paper"
+        else:
+            self.trading_provider = configured_trading_provider
         # "paper" is an execution mode, not a broker adapter.
         # In paper mode we still use the configured market-data adapter (for quotes/status).
         if self.trading_provider == "paper":
@@ -287,9 +517,9 @@ class StrategyRuntime:
         
         # Setup Executor
         if self.trading_provider == "paper":
-             self.executor = PaperExecutor(initial_capital=settings.initial_capital)
+            self.executor = PaperExecutor(initial_capital=settings.initial_capital)
         else:
-             self.executor = LiveExecutor(adapter=self.trading_adapter)
+            self.executor = LiveExecutor(adapter=self.trading_adapter)
 
         self._wire_event_handlers()
         self.journal = JournalManager(
@@ -319,21 +549,84 @@ class StrategyRuntime:
             strategy_name=self.settings.strategy_name,
         )
         ctx.link_portfolio(self.portfolio)
+        # Replay mode needs option chain/quote resolution from historical DB,
+        # so strategies can run without live broker dependencies.
+        if self.settings.feed_source == "replay_ws":
+            setattr(ctx, "market_data_resolver", ReplayOptionDataResolver(self.settings))
         return load_strategy(ctx, self.settings.strategy_name, self.settings.strategy_class_path)
 
     def _record_event(self, event_type: str, payload: dict[str, Any]) -> None:
         self._recent_events.append(
             {
-                "time": datetime.utcnow().isoformat(),
+                "time": now_ist().isoformat(),
                 "type": event_type,
                 "payload": payload,
             }
         )
 
+    @staticmethod
+    def _normalize_symbol_for_zerodha(symbol: str) -> str:
+        alias_map = {
+            "NSE:NIFTY50-INDEX": "NSE:NIFTY 50",
+            "NSE:NIFTY50": "NSE:NIFTY 50",
+            "NSE:BANKNIFTY-INDEX": "NSE:NIFTY BANK",
+            "NSE:NIFTYBANK-INDEX": "NSE:NIFTY BANK",
+            "NSE:FINNIFTY-INDEX": "NSE:NIFTY FIN SERVICE",
+            "NSE:MIDCPNIFTY-INDEX": "NSE:NIFTY MID SELECT",
+        }
+        return alias_map.get(symbol, symbol)
+
+    def _build_zerodha_order_api_preview(self, order: Any) -> dict[str, Any]:
+        normalized = self._normalize_symbol_for_zerodha(order.symbol)
+        if ":" in normalized:
+            exchange, tradingsymbol = normalized.split(":", 1)
+        else:
+            exchange, tradingsymbol = "NSE", normalized
+
+        order_type = str(getattr(order.order_type, "value", "MARKET")).upper()
+        payload: dict[str, Any] = {
+            "exchange": exchange,
+            "tradingsymbol": tradingsymbol,
+            "transaction_type": str(order.side.value).upper(),
+            "quantity": int(order.quantity),
+            "order_type": order_type,
+            "product": "MIS",
+            "validity": "DAY",
+            "variety": "regular",
+            "tag": (str(order.tag)[:20] if order.tag else "ASTRA"),
+        }
+        if order.price is not None and order_type != "MARKET":
+            payload["price"] = float(order.price)
+
+        curl_parts = [
+            "curl -X POST \"https://api.kite.trade/orders/regular\"",
+            "-H \"X-Kite-Version: 3\"",
+            "-H \"Authorization: token <api_key>:<access_token>\"",
+            "-H \"Content-Type: application/x-www-form-urlencoded\"",
+        ]
+        curl_parts.extend([f"--data-urlencode \"{k}={v}\"" for k, v in payload.items()])
+
+        return {
+            "provider": "zerodha",
+            "mode": "simulated",
+            "transport": "http",
+            "maps_to_event": "ORDER_PLACED",
+            "executed": False,
+            "request": {
+                "method": "POST",
+                "url": "https://api.kite.trade/orders/regular",
+                "content_type": "application/x-www-form-urlencoded",
+                "payload": payload,
+            },
+            "curl_preview": " ".join(curl_parts),
+            "note": "Dry-run preview only. Runtime did not execute this HTTP request.",
+        }
+
     def _wire_event_handlers(self) -> None:
         bus.subscribe(EventType.BAR, self._on_bar_event)
         bus.subscribe(EventType.SIGNAL, self._on_signal_event)
         bus.subscribe(EventType.ORDER, self._on_order_event)
+        bus.subscribe(EventType.ORDER, self.executor.handle_order_event)
         bus.subscribe(EventType.FILL, self._on_fill_event)
 
     async def _on_bar_event(self, event: BarEvent) -> None:
@@ -345,7 +638,7 @@ class StrategyRuntime:
             {
                 "symbol": bar.symbol,
                 "timeframe": bar.timeframe,
-                "time": bar.timestamp.isoformat(),
+                "time": isoformat_ist(bar.timestamp),
                 "close": bar.close,
                 "volume": bar.volume,
             },
@@ -391,6 +684,11 @@ class StrategyRuntime:
         
         # Astra Journaling
         basket_id = getattr(order, "basket_id", "none")
+        market_event_ts = isoformat_ist(self._latest_snapshot.bar.timestamp) if self._latest_snapshot else None
+        if self._latest_snapshot and self._latest_snapshot.symbol == order.symbol:
+            if order.price is None:
+                order.price = self._latest_snapshot.bar.close
+            order.created_at = self._latest_snapshot.bar.timestamp
         asyncio.create_task(self.journal.log_order(
             order.symbol,
             {
@@ -401,8 +699,22 @@ class StrategyRuntime:
                 "tag": order.tag,
                 "status": "PLACED"
             },
-            basket_id=basket_id
+            basket_id=basket_id,
+            event_ts=market_event_ts,
         ))
+
+        # In replay/paper mode, add a simulated Zerodha HTTP call preview for auditability.
+        if self.settings.feed_source == "replay_ws" or self.trading_provider == "paper":
+            api_preview = self._build_zerodha_order_api_preview(order)
+            asyncio.create_task(
+                self.journal.log_event(
+                    "BROKER_API_CALL_SIMULATED",
+                    order.symbol,
+                    api_preview,
+                    basket_id=basket_id,
+                    event_ts=market_event_ts,
+                )
+            )
 
         current_position = self.portfolio.get_position(order.symbol)
         current_quantity = current_position.quantity if current_position else 0
@@ -451,12 +763,13 @@ class StrategyRuntime:
                 "side": fill.side.value,
                 "quantity": fill.quantity,
                 "price": fill.price,
-                "filled_at": fill.filled_at.isoformat(),
+                "filled_at": isoformat_ist(fill.filled_at),
             },
         )
         
         # Astra Journaling
         basket_id = getattr(fill, "basket_id", "none")
+        self.portfolio.update_position(fill.symbol, fill.quantity, fill.price, fill.side)
         asyncio.create_task(self.journal.log_fill(
             fill.symbol,
             {
@@ -464,7 +777,7 @@ class StrategyRuntime:
                 "side": fill.side.value,
                 "quantity": fill.quantity,
                 "price": fill.price,
-                "filled_at": fill.filled_at.isoformat()
+                "filled_at": isoformat_ist(fill.filled_at)
             },
             basket_id=basket_id
         ))
@@ -486,7 +799,7 @@ class StrategyRuntime:
     def _snapshot_from_bars(self, bars: list[Bar]) -> MarketSnapshot:
         rows = [
             {
-                "time": bar.timestamp.isoformat(),
+                "time": isoformat_ist(bar.timestamp),
                 "open": bar.open,
                 "high": bar.high,
                 "low": bar.low,
@@ -513,18 +826,28 @@ class StrategyRuntime:
     def get_status(self) -> dict[str, Any]:
         position = self.portfolio.get_position(self.settings.symbol)
         latest = self._latest_snapshot
+        total_pnl = self.portfolio.get_total_pnl(self._latest_price_by_symbol)
+        cash = getattr(self.portfolio, "cash", None)
+        equity = getattr(self.portfolio, "equity", None)
+        if cash is None:
+            # PortfolioManager currently tracks initial_capital + pnl rather than cash/equity fields.
+            cash = float(getattr(self.portfolio, "initial_capital", 0.0)) + float(total_pnl)
+        if equity is None:
+            equity = float(getattr(self.portfolio, "initial_capital", 0.0)) + float(total_pnl)
+
         return {
             "running": self._running,
             "feed_source": self.settings.feed_source,
             "provider": self.settings.provider,
+            "trading_provider": self.trading_provider,
             "symbol": self.settings.symbol,
             "timeframe": self.settings.timeframe,
             "strategy": self.strategy.__class__.__name__,
-            "started_at": self._started_at.isoformat() if self._started_at else None,
+            "started_at": isoformat_ist(self._started_at) if self._started_at else None,
             "last_error": self._latest_error or None,
             "latest_bar": (
                 {
-                    "time": latest.bar.timestamp.isoformat(),
+                    "time": isoformat_ist(latest.bar.timestamp),
                     "open": latest.bar.open,
                     "high": latest.bar.high,
                     "low": latest.bar.low,
@@ -548,8 +871,10 @@ class StrategyRuntime:
                 else None
             ),
             "portfolio": {
-                "cash": self.portfolio.cash,
-                "equity": self.portfolio.equity,
+                "cash": cash,
+                "equity": equity,
+                "realized_pnl": getattr(self.portfolio, "realized_pnl", 0.0),
+                "total_pnl": total_pnl,
             },
             "pending_orders": len(self.executor.orders),
             "replay": {
@@ -558,6 +883,11 @@ class StrategyRuntime:
                 "speed": self.settings.replay_speed,
                 "completed": getattr(self.feed, "completed", False),
                 "error": getattr(self.feed, "error", "") or None,
+                "aggregation": (
+                    self.feed.get_aggregation_status()
+                    if hasattr(self.feed, "get_aggregation_status")
+                    else None
+                ),
             },
         }
 
@@ -678,7 +1008,7 @@ class StrategyRuntime:
                 logger.error(f"Failed to check auth status via DB: {e}. Proceeding in offline/file mode.")
 
         self._running = True
-        self._started_at = datetime.utcnow()
+        self._started_at = now_ist()
         self._latest_error = ""
         self.strategy.on_init()
         self.strategy.on_start()

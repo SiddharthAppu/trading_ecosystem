@@ -79,7 +79,7 @@ class CompositeNotifier(BaseNotifier):
     @classmethod
     def from_settings(cls, settings: RuntimeSettings) -> "CompositeNotifier":
         notifiers: list[BaseNotifier] = [LogNotifier()]
-        if settings.telegram_bot_token and settings.telegram_chat_id:
+        if settings.telegram_enabled and settings.telegram_bot_token and settings.telegram_chat_id:
             notifiers.append(TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id))
         return cls(notifiers)
 
