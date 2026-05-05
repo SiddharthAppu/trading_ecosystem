@@ -5,6 +5,7 @@ import json
 import logging
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -840,6 +841,9 @@ class StrategyRuntime:
             "feed_source": self.settings.feed_source,
             "provider": self.settings.provider,
             "trading_provider": self.trading_provider,
+            "run_directory": Path(self.settings.log_file).parent.as_posix(),
+            "log_path": Path(self.settings.log_file).as_posix(),
+            "journal_path": self.journal.path.as_posix(),
             "symbol": self.settings.symbol,
             "timeframe": self.settings.timeframe,
             "strategy": self.strategy.__class__.__name__,
@@ -998,6 +1002,44 @@ class StrategyRuntime:
                 logger.warning("Journal recovery: skipped fill %s — %s", fill, exc)
         logger.info("Journal recovery complete. Portfolio positions: %s", list(self.portfolio.positions.keys()))
 
+    async def _emit_run_header(self) -> None:
+        """Write a RUNTIME_HEADER event as the first entry of this run's journal."""
+        s = self.settings
+        strategy_params = load_strategy_params(s.strategy_name)
+        run_params = {
+            "run_log_path": s.log_file,
+            "feed_source": s.feed_source,
+            "provider": s.provider,
+            "trading_provider": self.trading_provider,
+            "symbol": s.symbol,
+            "indicator_input_mode": s.indicator_input_mode,
+            "quantity": s.quantity,
+            "initial_capital": s.initial_capital,
+            "max_position_quantity": s.max_position_quantity,
+            "max_notional_per_trade": s.max_notional_per_trade,
+            "stop_loss_pct": s.stop_loss_pct,
+            "trailing_stop_pct": s.trailing_stop_pct,
+            "replay": {
+                "data_type": s.replay_data_type,
+                "start_time": s.replay_start_time,
+                "end_time": s.replay_end_time,
+                "speed": s.replay_speed,
+            } if s.feed_source == "replay_ws" else None,
+            "strategy_params": strategy_params,
+        }
+        await self.journal.log_run_header(
+            symbol=s.symbol,
+            strategy=s.strategy_name,
+            timeframe=s.timeframe,
+            indicators=list(s.indicators),
+            run_params=run_params,
+        )
+        logger.info(
+            "Journal run header written — strategy=%s indicators=%s",
+            s.strategy_name,
+            s.indicators,
+        )
+
     async def run(self) -> None:
         requires_auth = self.settings.feed_source != "replay_ws"
         if requires_auth:
@@ -1015,6 +1057,10 @@ class StrategyRuntime:
 
         # Restore portfolio from journal before entering the main loop
         await self._recover_from_journal()
+
+        # Write a self-describing header as the first new entry of this run's journal.
+        # Contains all strategy parameters and indicators for backtracking purposes.
+        await self._emit_run_header()
 
         self._record_event(
             "runtime_start",

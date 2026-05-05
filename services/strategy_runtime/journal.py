@@ -60,6 +60,29 @@ class JournalManager:
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
 
+    async def log_run_header(
+        self,
+        symbol: str,
+        strategy: str,
+        timeframe: str,
+        indicators: list[str],
+        run_params: dict[str, Any],
+        basket_id: str = "none",
+    ) -> None:
+        """Write a RUNTIME_HEADER event as the first entry of a new run journal.
+        Contains strategy configuration and parameters for backtracking."""
+        await self.log_event(
+            "RUNTIME_HEADER",
+            symbol,
+            {
+                "strategy": strategy,
+                "timeframe": timeframe,
+                "indicators": indicators,
+                **run_params,
+            },
+            basket_id=basket_id,
+        )
+
     async def log_indicator_signal(self, symbol: str, indicator: str, value: Any, threshold: Any, action: str, basket_id: str = "none"):
         await self.log_event("INDICATOR_PASSED", symbol, {
             "indicator": indicator,

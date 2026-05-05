@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -114,11 +115,11 @@ def normalize_symbol_for_tradingview(raw_symbol: str, symbol_map: dict[str, str]
     if upper in mapping:
         return mapping[upper]
 
-    if upper in {"NIFTY", "NIFTY50", "NIFTY 50", "NIFTYINDEX"}:
+    if upper in {"NIFTY", "NIFTY50", "NIFTY 50", "NIFTYINDEX", "NIFTY50-INDEX", "NSE:NIFTY50-INDEX"}:
         return "NSE:NIFTY"
-    if upper in {"BANKNIFTY", "NIFTYBANK"}:
+    if upper in {"BANKNIFTY", "NIFTYBANK", "BANKNIFTY-INDEX", "NSE:BANKNIFTY-INDEX"}:
         return "NSE:BANKNIFTY"
-    if upper in {"FINNIFTY", "NIFTYFINSERVICE"}:
+    if upper in {"FINNIFTY", "NIFTYFINSERVICE", "FINNIFTY-INDEX", "NSE:FINNIFTY-INDEX"}:
         return "NSE:FINNIFTY"
 
     option_symbol = _build_option_symbol(upper)
@@ -126,6 +127,9 @@ def normalize_symbol_for_tradingview(raw_symbol: str, symbol_map: dict[str, str]
         return option_symbol
 
     # Final fallback for equity/index-like symbols.
+    # Avoid double prefixing if already present (e.g. NSE:SYMBOL)
+    if ":" in upper:
+        return upper
     return f"NSE:{upper}"
 
 
@@ -137,6 +141,17 @@ def _extract_side(data: dict[str, Any]) -> str:
     if action in {"BUY", "SELL"}:
         return action
     return ""
+
+
+def _extract_price(data: dict[str, Any]) -> float | None:
+    for key in ["price", "fill_price", "avg_price", "ltp"]:
+        val = data.get(key)
+        if val is not None:
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                continue
+    return None
 
 
 def _event_key(entry: dict[str, Any], line_no: int) -> str:
@@ -178,7 +193,20 @@ def build_event_view(
 
     tradingview_url = None
     if tv_symbol:
-        tradingview_url = f"https://www.tradingview.com/chart/?{urlencode({'symbol': tv_symbol, 'interval': tv_interval})}"
+        layout_id = os.getenv("TRADINGVIEW_LAYOUT_ID", "").strip()
+        layout_path = f"{layout_id}/" if layout_id else ""
+        
+        tv_params = {"symbol": tv_symbol, "interval": tv_interval}
+        try:
+            # event_ts is already IST ISO format from _iso_utc
+            dt = datetime.fromisoformat(event_ts)
+            tv_params["time"] = int(dt.timestamp())
+        except Exception:
+            pass
+        use_desktop = os.getenv("TRADINGVIEW_USE_DESKTOP_APP", "").lower() == "true"
+        base_protocol = "tradingview://tradingview.com" if use_desktop else "https://www.tradingview.com"
+        
+        tradingview_url = f"{base_protocol}/chart/{layout_path}?{urlencode(tv_params)}"
         params["tvUrl"] = tradingview_url
 
     local_chart_url = f"{chart_base_path}?{urlencode(params)}"
@@ -194,6 +222,7 @@ def build_event_view(
         "symbol": symbol_raw,
         "basket_id": str(entry.get("basket_id") or ""),
         "side": side,
+        "price": _extract_price(data),
         "data": data,
         "links": {
             "local_chart_url": local_chart_url,

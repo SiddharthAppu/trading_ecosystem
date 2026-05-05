@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 from services.strategy_runtime.bootstrap import ensure_repo_paths
 
@@ -20,7 +22,27 @@ class IstFormatter(logging.Formatter):
         return dt.isoformat(timespec="milliseconds")
 
 
+def _slugify_run_part(value: str, fallback: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "-", (value or "").strip()).strip("-")
+    return (cleaned or fallback)[:48]
+
+
+def _assign_run_scoped_log_file(settings: RuntimeSettings) -> None:
+    log_path = Path(settings.log_file)
+    run_id = datetime.now(IST).strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    run_suffix = "_".join(
+        [
+            _slugify_run_part(settings.strategy_name, "strategy"),
+            _slugify_run_part(settings.provider, "provider"),
+            _slugify_run_part(settings.symbol, "symbol"),
+        ]
+    )
+    run_dir = log_path.parent / "runs" / f"{run_id}_{run_suffix}"
+    settings.log_file = (run_dir / log_path.name).as_posix()
+
+
 def configure_logging(settings: RuntimeSettings) -> None:
+    _assign_run_scoped_log_file(settings)
     configure_file_logging(settings)
     formatter = IstFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
     handlers = [
