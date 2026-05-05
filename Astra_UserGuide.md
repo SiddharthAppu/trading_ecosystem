@@ -725,11 +725,42 @@ Alerts are sent on: ORDER_PLACED, ORDER_FILL, strategy errors. When `TELEGRAM_EN
 
 ## 11. Journal Event Linking
 
-Every order and signal decision is written to a JSONL journal at:
+Every order and signal decision is written to a JSONL journal at `logs\strategy_runtime\*_journal.jsonl`. Astra provides tools to bridge these logs into visual charting environments.
 
+### TradingView Desktop & Deep-Links
+
+The `journal_event_linker.py` tool generates a report with deep-links that can open your TradingView Desktop application directly to the exact candle where an event occurred.
+
+**Enable Desktop Protocol:**
+Set the environment variable `TRADINGVIEW_USE_DESKTOP_APP=true` before running the linker. This converts `https://` links into `tradingview://` deep-links.
+
+### Generating Visual Reports
+
+Run the linker tool to generate a Markdown report and a Pine Script marker file:
+
+```powershell
+# Set environment for high-precision links
+$env:TRADINGVIEW_LAYOUT_ID="z9HWD4GU"
+$env:TRADINGVIEW_USE_DESKTOP_APP="true"
+
+python .\UtilTools\journal_event_linker.py `
+  --journal .\logs\strategy_runtime\runtime_journal.jsonl `
+  --output-md .\logs\strategy_runtime\journal_links.md `
+  --output-json .\logs\strategy_runtime\journal_links.json
 ```
-logs\strategy_runtime\*_journal.jsonl
-```
+
+**Generated Artifacts:**
+1.  `journal_links.md`: An interactive table with BUY/SELL sides and deep-links.
+2.  `journal_links.pine`: A **Pine Script v6** indicator containing your trade coordinates.
+
+### Visualising Trades in TradingView
+
+To see your Astra trades overlaid on your TradingView charts:
+
+1.  Open the generated `journal_links.pine` in a text editor and copy the code.
+2.  In TradingView, open the **Pine Editor** (bottom panel).
+3.  Paste the code and click **Add to Chart**.
+4.  **Automatic Indicators**: If your strategy journal contains a `RUNTIME_HEADER` with `indicators` metadata (e.g., EMA, SMA, RSI, MACD), the generated script will automatically plot these indicators and add snapshots to the trade labels.
 
 ### Dashboard (real-time)
 
@@ -737,36 +768,6 @@ logs\strategy_runtime\*_journal.jsonl
 - Go to **Journal Events** — filter by event type, symbol, or date.
 - Click **Chart** to view the event on a local chart with a time marker.
 - Click **TV** to open TradingView at the matching symbol and timeframe.
-
-### Offline report generation
-
-```powershell
-python .\UtilTools\journal_event_linker.py `
-  --journal .\logs\strategy_runtime\runtime_journal.jsonl `
-  --output-md .\logs\strategy_runtime\journal_report.md `
-  --output-json .\logs\strategy_runtime\journal_report.json
-```
-
-Filter to fills only:
-
-```powershell
-python .\UtilTools\journal_event_linker.py `
-  --journal .\logs\strategy_runtime\runtime_journal.jsonl `
-  --event ORDER_FILL --limit 500
-```
-
-### TradingView symbol map
-
-`config\strategies\tradingview_symbol_map.json`:
-
-```json
-{
-  "NIFTY": "NSE:NIFTY",
-  "BANKNIFTY": "NSE:BANKNIFTY"
-}
-```
-
-NIFTY option symbols (e.g., `NIFTY24APR26000CE`) are auto-converted to TradingView NFO format.
 
 ---
 
