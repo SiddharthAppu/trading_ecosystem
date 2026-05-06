@@ -35,10 +35,12 @@ Astra is a modular, paper-trading-first strategy runtime for NIFTY50 options. Ke
 | Offline backtest script | ✅ |
 | Parameter optimisation grid search | ✅ |
 | NIFTY Trend Options strategy (premium-near-200, 2:1 RR) | ✅ |
+| EMA Cross strategy (Trend momentum, Bullish stack) | ✅ |
 | Journal JSONL with TradingView deep-links | ✅ |
 | Telegram trade alerts | ✅ |
-| File-based option tick capture (EOD import) | ✅ |
+| File-based option tick capture (Zero-DB Mode) | ✅ |
 | One-click kit builder script | ✅ |
+| Unified Capture + Strategy Startup | ✅ |
 
 ---
 
@@ -73,9 +75,10 @@ Contents:
 - `services/strategy_runtime/` — includes the replay option data resolver and `replay_ws` feed support
 - `packages/trading_core/`
 - `config/` — includes `strategy_runtime.paper_replay.env.example` and `strategy_runtime.paper_live.env.example`
-- `scripts/start_strategy_runtime_live_paper.ps1` — live broker feed launcher
+- `scripts/start_live_capture_and_strategy.ps1` — **Unified launcher** (Data + Strategy)
+- `scripts/start_strategy_runtime_live_paper.ps1` — Strategy-only live launcher
 - `scripts/start_strategy_runtime_paper_replay.ps1` — replay-paper launcher (connects to external replay engine)
-- `scripts/authenticate_broker.py`, `scripts/start_upstox_tick_capture_file.ps1`
+- `scripts/authenticate_broker.py`, `scripts/start_upstox_tick_capture_file.ps1`, `scripts/lib/master_recorder.py`
 
 > **Important:** `astra-kit` does **not** bundle `services/replay_engine/`. To use replay-paper mode with this kit, the replay engine WebSocket server must be started separately — either from the workspace or from `astra-replay-kit`. The strategy runtime will connect to it via `STRATEGY_RUNTIME_REPLAY_WS_URL`.
 
@@ -588,62 +591,76 @@ Or with explicit strategy:
 powershell -ExecutionPolicy Bypass -File .\scripts\start_strategy_runtime_live_paper.ps1 -Strategy nifty_trend_options
 ```
 
-### Mode 2: Replay-paper (using external replay engine)
+### Mode 3: Unified Capture + Strategy (Astra Studio Mode)
 
-`astra-kit` does **not** bundle the replay engine. You need it running separately first — either from `astra-replay-kit` or from the workspace. Then connect this kit's strategy runtime to it.
-
-#### Step 1: Start the replay engine (from astra-replay-kit or workspace)
-
-From `astra-replay-kit`:
-```powershell
-# In astra-replay-kit folder — start engine only
-.\.venv\Scripts\python.exe .\services\replay_engine\main.py
-```
-
-From workspace:
-```powershell
-python .\services\replay_engine\main.py
-```
-
-#### Step 2: Start strategy runtime in replay mode (from astra-kit)
+This is the recommended mode for active paper trading sessions. It launches the Data Collector, starts the Master Recorder (to capture ticks to CSV), and starts your Strategy Runtime in one window.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start_strategy_runtime_paper_replay.ps1 `
-  -Strategy nifty_trend_options -StartReplayEngine:$false
+powershell -ExecutionPolicy Bypass -File .\scripts\start_live_capture_and_strategy.ps1 -Strategy ema_cross
 ```
 
-Ensure `config\strategy_runtime.paper_replay.env` has:
-```dotenv
-STRATEGY_RUNTIME_FEED_SOURCE=replay_ws
-STRATEGY_RUNTIME_REPLAY_WS_URL=ws://localhost:8765
-STRATEGY_RUNTIME_STRATEGY=nifty_trend_options
-```
+**What this does:**
+1.  **Ensures DB & Collector:** Boots the TimescaleDB container and Data Collector API.
+2.  **Starts Master Recorder:** Begins capturing ticks for the next 4 weekly expiries into `logs/ticks/`.
+3.  **Starts Strategy:** Launches the strategy engine in Paper Trading mode connected to the live broker feed.
 
-> **Tip:** If you want the replay engine bundled with the strategy runtime in a single launcher, use `astra-replay-kit` instead — it bundles everything and `START_REPLAY_KIT.ps1` starts both together.
+---
 
-### Tick capture (EOD DB import workflow)
+## 9. Strategy Reference: ema_cross
 
-Start option tick capture to file during market hours:
+The `ema_cross` strategy is a trend-following momentum strategy designed for NIFTY50.
 
+### Entry Logic (Bullish Stack)
+- **Condition:** `Price > EMA 20 > SMA 20`
+- **Logic:** The strategy enters a LONG position when the price is trending above both its short-term exponential and medium-term simple moving averages.
+- **Trigger:** Only triggers if no position is currently open.
+
+### Exit Logic
+- **Condition:** `Price < EMA 20`
+- **Logic:** The strategy closes the position as soon as the price breaks the short-term trend line (EMA 20).
+
+### Key Parameters
+- `STRATEGY_RUNTIME_TIMEFRAME`: 5m (Standard)
+- `STRATEGY_RUNTIME_INDICATORS`: `ema_20,sma_20`
+
+---
+
+## 10. Risk Management & Stop Loss
+
+Astra enforces risk management at the **Infrastructure (Runtime) Level**, independent of the specific strategy code. This ensures safety even if a strategy has a logic bug.
+
+### Global Safety Toggles
+In your `.env` file, these parameters control the **RuntimeRiskManager**:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `STRATEGY_RUNTIME_STOP_LOSS_PCT` | `0.01` (1%) | Hard stop loss relative to entry price. |
+| `STRATEGY_RUNTIME_TRAILING_STOP_PCT` | `0.015` (1.5%) | Automatically trails the price at a 1.5% distance. |
+| `STRATEGY_RUNTIME_MAX_POSITION_QTY` | `1` | Maximum quantity allowed for any single symbol. |
+
+**Important:** If the price hits your 1% Stop Loss, the **Engine** will force-exit the position and record a `STOP_LOSS_EXIT` in the journal, even if the strategy logic hasn't triggered an exit yet.
+
+---
+
+## 11. Live Tick Capture (Zero-DB Mode)
+
+To ensure maximum performance and low latency during market hours, Astra uses a **Zero-DB Capture** strategy.
+
+### How it works
+- **Real-time Persistence:** Market ticks are streamed directly to symbol-specific CSV files.
+- **Default Config:** `ASTRA_RECORDER_ENABLE_DB=false` is the default in Astra Kits.
+- **Naming Convention:** `logs/ticks/{Clean_Symbol}_{YYYY-MM-DD}.csv`
+- **Format:** `timestamp, symbol, price, volume, oi, delta, theta, bid, ask`
+
+### EOD Synchronization
+After the market closes, you can import these CSV files into your database for historical analysis:
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start_upstox_tick_capture_file.ps1 -StrikeCount 21 -Mode full
-```
-
-After market close, import captured ticks into DB:
-
-```powershell
-python .\scripts\lib\import_ticks_to_db.py --date 2026-04-30 --dir .\logs\ticks
-```
-
-Dry run (no writes):
-
-```powershell
-python .\scripts\lib\import_ticks_to_db.py --date 2026-04-30 --dir .\logs\ticks --dry-run
+python .\scripts\lib\import_ticks_to_db.py --date 2026-05-06 --dir .\logs\ticks
 ```
 
 ---
 
-## 9. Configuration Reference
+## 12. Configuration Reference
 
 ### strategy_runtime.paper_replay.env — full key list
 

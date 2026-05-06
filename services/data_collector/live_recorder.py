@@ -66,8 +66,11 @@ class LiveTickRecorder:
         self.event_queue = asyncio.Queue()
         self._ws_connected = False
         self.file_logger = TickFileLogger()
-        self.enable_db = True
-        self.enable_file = True
+        
+        # Astra 'Zero-DB' logic: Default to file-only capture to reduce latency during market hours.
+        # DB persistence is treated as 'Legacy Mode' or for EOD sync.
+        self.enable_db = os.getenv("ASTRA_RECORDER_ENABLE_DB", "false").lower() in ("true", "1", "yes")
+        self.enable_file = os.getenv("ASTRA_RECORDER_ENABLE_FILE", "true").lower() in ("true", "1", "yes")
 
     async def connect_db(self):
         try:
