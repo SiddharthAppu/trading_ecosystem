@@ -34,7 +34,9 @@ param(
     [string]$Date = "",
     [switch]$SkipReplayEngine,
     [ValidateSet("interactive", "non-interactive")]
-    [string]$ConfirmationMode = "interactive"
+    [string]$ConfirmationMode = "interactive",
+    [string]$GlobalEnv = "",
+    [string]$EnvFile = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,8 +46,8 @@ $KIT_ROOT    = $PSScriptRoot
 $PYTHON_EXE  = "$KIT_ROOT\.venv\Scripts\python.exe"
 $RUNTIME_SRV = "$KIT_ROOT\services\strategy_runtime\server.py"
 $REPLAY_MAIN  = "$KIT_ROOT\services\replay_engine\main.py"
-$ENV_FILE     = "$KIT_ROOT\config\strategy_runtime.paper_replay.env"
-$GLOBAL_ENV   = "$KIT_ROOT\config\.env"
+$ENV_FILE     = if ($EnvFile) { if ([System.IO.Path]::IsPathRooted($EnvFile)) { $EnvFile } else { Join-Path $KIT_ROOT $EnvFile } } else { "$KIT_ROOT\config\strategy_runtime.paper_replay.env" }
+$GLOBAL_ENV   = if ($GlobalEnv) { if ([System.IO.Path]::IsPathRooted($GlobalEnv)) { $GlobalEnv } else { Join-Path $KIT_ROOT $GlobalEnv } } else { "$KIT_ROOT\config\.env" }
 $LOG_DIR      = "$KIT_ROOT\logs"
 $RUN_SUMMARY_DIR = "$LOG_DIR\run_summaries"
 $RUN_ID = Get-Date -Format "yyyyMMdd_HHmmss"

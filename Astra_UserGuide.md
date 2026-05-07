@@ -326,6 +326,18 @@ If preflight found `0` rows, the launcher warns that replay may remain idle with
 .\START_REPLAY_KIT.ps1 -Date 2026-04-15
 ```
 
+### Override config at launch
+
+You can override the default configuration files if you have multiple strategy setups:
+
+```powershell
+# Point to a specific strategy config
+.\START_REPLAY_KIT.ps1 -EnvFile "config\strategy_runtime.ema_cross.paper_replay.env"
+
+# Point to custom global credentials (DB etc.)
+.\START_REPLAY_KIT.ps1 -GlobalEnv "C:\Secrets\.env"
+```
+
 ### Change strategy
 
 ```powershell
@@ -510,6 +522,12 @@ Show top 15 parameter combinations instead of default 10:
 
 ```powershell
 .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -Mode optimize -Top 15
+```
+
+### Override credentials at launch
+
+```powershell
+.\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -EnvFile "D:\Configs\trading_db.env"
 ```
 
 ### Run scripts directly (bypass runner)

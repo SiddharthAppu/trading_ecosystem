@@ -4,7 +4,7 @@ import json
 import asyncpg
 import threading
 import logging
-from typing import List, Any
+from typing import List, Any, Optional
 from datetime import datetime, timezone
 from fyers_apiv3.FyersWebsocket.data_ws import FyersDataSocket
 import upstox_client
@@ -66,11 +66,36 @@ class LiveTickRecorder:
         self.event_queue = asyncio.Queue()
         self._ws_connected = False
         self.file_logger = TickFileLogger()
+        self.enable_db_override: Optional[bool] = None
         
-        # Astra 'Zero-DB' logic: Default to file-only capture to reduce latency during market hours.
-        # DB persistence is treated as 'Legacy Mode' or for EOD sync.
+        # Default to file-first capture unless explicitly enabled.
         self.enable_db = os.getenv("ASTRA_RECORDER_ENABLE_DB", "false").lower() in ("true", "1", "yes")
         self.enable_file = os.getenv("ASTRA_RECORDER_ENABLE_FILE", "true").lower() in ("true", "1", "yes")
+
+    def _should_persist_to_db(self) -> bool:
+        if self.enable_db_override is not None:
+            return self.enable_db_override
+        return self.enable_db
+
+    def _db_mode_label(self) -> str:
+        return "enabled" if self._should_persist_to_db() else "disabled"
+
+    def _apply_enable_db_override(self, enable_db_override: Optional[str]) -> None:
+        if enable_db_override is None:
+            self.enable_db_override = None
+            return
+
+        value = str(enable_db_override).strip().lower()
+        if value == "default":
+            self.enable_db_override = None
+            return
+        if value in ("true", "1", "yes"):
+            self.enable_db_override = True
+            return
+        if value in ("false", "0", "no"):
+            self.enable_db_override = False
+            return
+        raise ValueError(f"Invalid enable_db override: {enable_db_override!r}")
 
     async def connect_db(self):
         try:
@@ -147,7 +172,7 @@ class LiveTickRecorder:
                     logger.error(f"File logging failed: {e}")
 
             # 2. DB Logging (Legacy Mode)
-            if self.enable_db:
+            if self._should_persist_to_db():
                 try:
                     pool = await self.connect_db()
                     if pool:
@@ -200,7 +225,7 @@ class LiveTickRecorder:
             if not valid_rows:
                 continue
 
-            if self.enable_db:
+            if self._should_persist_to_db():
                 try:
                     pool = await self.connect_db()
                     if pool:
@@ -383,13 +408,19 @@ class LiveTickRecorder:
                 except RuntimeError:
                     pass
 
-    async def start(self, provider: str = "fyers", mode: str = "lite"):
-        if self.is_running: return "Already running"
+    async def start(self, provider: str = "fyers", mode: str = "lite", enable_db_override: Optional[str] = None):
         self.provider_name = provider.lower()
         self.stream_mode = (mode or "lite").lower()
         self.adapter = get_adapter(self.provider_name)
+        self._apply_enable_db_override(enable_db_override)
+
+        if self.is_running:
+            logger.info("Recorder already running for provider=%s db_persistence=%s", self.provider_name, self._db_mode_label())
+            return "Already running"
         
         if not self.adapter.validate_token(): return "Token invalid"
+
+        logger.info("Starting recorder for provider=%s mode=%s db_persistence=%s", self.provider_name, self.stream_mode, self._db_mode_label())
         
         self.is_running = True
         asyncio.create_task(self.save_ticks_to_db())
@@ -427,6 +458,7 @@ class LiveTickRecorder:
 
     async def stop(self):
         self.is_running = False
+        self.enable_db_override = None
         if self.fyers_socket: self.fyers_socket.close_connection()
         if self.upstox_streamer:
             try:
@@ -470,7 +502,9 @@ class LiveTickRecorder:
             "is_running": self.is_running,
             "provider": self.provider_name,
             "symbols": self.symbols,
-            "ws_connected": self._ws_connected
+            "ws_connected": self._ws_connected,
+            "enable_db": self._should_persist_to_db(),
+            "enable_db_override": self.enable_db_override,
         }
 
     async def event_generator(self):
@@ -481,7 +515,7 @@ class LiveTickRecorder:
 class MultiProviderRecorderManager:
     def __init__(self):
         self._recorders = {"fyers": LiveTickRecorder("fyers"), "upstox": LiveTickRecorder("upstox")}
-    async def start(self, p, mode="lite"): return await self._recorders[p.lower()].start(p, mode)
+    async def start(self, p, mode="lite", enable_db_override=None): return await self._recorders[p.lower()].start(p, mode, enable_db_override)
     async def stop(self, p): return await self._recorders[p.lower()].stop()
     async def subscribe(self, p, s): return await self._recorders[p.lower()].subscribe(s)
     async def unsubscribe(self, p, s): return await self._recorders[p.lower()].unsubscribe(s)

@@ -1,6 +1,35 @@
 @echo off
+setlocal EnableExtensions
+
 :: Thin launcher — all logic lives in run_daily_capture_eod_workflow.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run_daily_capture_eod_workflow.ps1" %*
+set "PS_ARGS="
+set "PS1_SCRIPT=%~dpn0.ps1"
+
+:parse_args
+if "%~1"=="" goto run_ps
+
+if /I "%~1"=="--enable-db" (
+    if "%~2"=="" (
+        echo ERROR: --enable-db requires a value of true, false, or default.
+        exit /b 1
+    )
+    set "PS_ARGS=%PS_ARGS% -EnableDB %~2"
+    shift
+    shift
+    goto parse_args
+)
+
+set "PS_ARGS=%PS_ARGS% %~1"
+shift
+goto parse_args
+
+:run_ps
+if not exist "%PS1_SCRIPT%" (
+    echo ERROR: Missing workflow script "%PS1_SCRIPT%"
+    exit /b 1
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1_SCRIPT%" %PS_ARGS%
 exit /b %ERRORLEVEL%
 
 :: ---- original bat preserved below (not executed) ----

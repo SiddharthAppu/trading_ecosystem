@@ -36,7 +36,8 @@ param(
     [ValidateSet("backtest", "optimize")]
     [string]$Mode   = "backtest",
     [int]$Top       = 10,
-    [string]$Symbol = ""
+    [string]$Symbol = "",
+    [string]$EnvFile = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,7 +47,7 @@ $KIT_ROOT    = $PSScriptRoot
 $PYTHON_EXE  = "$KIT_ROOT\.venv\Scripts\python.exe"
 $BACKTEST_PY = "$KIT_ROOT\scripts\backtest_nifty_trend.py"
 $OPTIMIZE_PY = "$KIT_ROOT\scripts\optimize_nifty_trend.py"
-$GLOBAL_ENV  = "$KIT_ROOT\config\.env"
+$GLOBAL_ENV  = if ($EnvFile) { if ([System.IO.Path]::IsPathRooted($EnvFile)) { $EnvFile } else { Join-Path $KIT_ROOT $EnvFile } } else { "$KIT_ROOT\config\.env" }
 
 # ── Banner ─────────────────────────────────────────────────────────────────────
 Write-Host ""
@@ -89,10 +90,10 @@ function Load-EnvFile([string]$Path) {
 
 if (Test-Path $GLOBAL_ENV) {
     Load-EnvFile $GLOBAL_ENV
-    Write-Host "[INFO] Loaded credentials from config\.env" -ForegroundColor DarkGray
+    Write-Host "[INFO] Loaded credentials from $GLOBAL_ENV" -ForegroundColor DarkGray
 } else {
-    Write-Host "[WARN] config\.env not found - DB connection may fail." -ForegroundColor Yellow
-    Write-Host "       Create it with DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD." -ForegroundColor Yellow
+    Write-Host "[WARN] Env file not found: $GLOBAL_ENV" -ForegroundColor Yellow
+    Write-Host "       DB connection may fail if credentials are missing." -ForegroundColor Yellow
 }
 
 # ── Set PYTHONPATH ─────────────────────────────────────────────────────────────

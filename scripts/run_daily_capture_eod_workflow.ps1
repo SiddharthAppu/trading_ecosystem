@@ -1,5 +1,8 @@
 #Requires -Version 5.1
-param()
+param(
+    [ValidateSet("true", "false", "default")]
+    [string]$EnableDB = "default"
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -42,6 +45,7 @@ Write-Host "IST Trade Date : $TRADE_DATE"
 Write-Host "Run Stamp      : $RUN_STAMP"
 Write-Host "Collector log  : $COLLECTOR_OUT"
 Write-Host "Recorder log   : $RECORDER_OUT"
+Write-Host "DB Override    : $EnableDB"
 Write-Host "================================================================"
 
 # Step 1 - Start Data Collector in background (or reuse if already running)
@@ -182,7 +186,7 @@ if ($istHHMM -ge 1545) {
     Write-Host "[3/7] Starting capture workers at IST $((Get-ISTNow).ToString('HH:mm:ss'))..."
     $RecorderProc = Start-Process `
         -FilePath         $PYTHON_EXE `
-        -ArgumentList     "$LIB_DIR\master_recorder.py", "--python", $PYTHON_EXE `
+        -ArgumentList     "$LIB_DIR\master_recorder.py", "--python", $PYTHON_EXE, "--enable-db", $EnableDB `
         -WorkingDirectory $ROOT `
         -RedirectStandardOutput $RECORDER_OUT `
         -RedirectStandardError  $RECORDER_ERR `

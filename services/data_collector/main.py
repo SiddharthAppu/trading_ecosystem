@@ -143,9 +143,16 @@ async def download_symbol(req: DownloadRequest):
         raise HTTPException(500, str(e))
 
 @app.post("/recorder/start")
-async def start_recorder(provider: str = "fyers", mode: str = "lite"):
-    status = await recorder_manager.start(provider, mode)
-    return {"status": status}
+async def start_recorder(
+    provider: str = "fyers",
+    mode: str = "lite",
+    enable_db: Optional[str] = Query(default=None),
+):
+    if enable_db is not None and enable_db not in {"true", "false", "default"}:
+        raise HTTPException(400, f"Invalid enable_db value: {enable_db!r}")
+    status = await recorder_manager.start(provider, mode, enable_db_override=enable_db)
+    current_status = recorder_manager.get_status(provider)
+    return {"status": status, "enable_db": current_status.get("enable_db")}
 
 @app.post("/recorder/stop")
 async def stop_recorder(provider: str = "fyers"):
