@@ -187,6 +187,47 @@ Run a pass/fail health check after market close for the day's live tick and Gree
 
 The script also writes a dated log file under `logs\eod_live_capture\` on every run.
 
+### 📂 No-DB Backfill & Full Audit Pipeline
+When using `--enable-db false` mode, tick CSVs are saved to `services/data_collector/logs/ticks/` instead of the database. Use this workflow to backfill captured data into the database and run the same audit stack as standard DB-mode captures.
+
+**Step 1 — Optional Dry-Run (count rows without writing)**
+```powershell
+.\.venv\Scripts\python.exe scripts\lib\import_ticks_to_db.py --date 2026-05-06 --dry-run
+```
+
+**Step 2 — Import No-DB CSV Ticks into Database**  
+Routes symbols to correct broker tables: `|` → `broker_upstox.market_ticks`, `:` → `broker_fyers.market_ticks`.
+```powershell
+.\.venv\Scripts\python.exe scripts\lib\import_ticks_to_db.py --date 2026-05-06
+```
+
+**Step 3 — DB-Backed EOD Verification**  
+Verify tick and Greeks row counts, symbol breadth, and feed silence health after import.
+```powershell
+.\.venv\Scripts\python.exe scripts\lib\verify_eod_live_capture.py --date 2026-05-06
+```
+
+**Step 4 — Timezone Integrity Audit**  
+Validate all timestamps are UTC-aligned and within/outside session windows correctly.
+```powershell
+.\.venv\Scripts\python.exe scripts\lib\audit_timezone_integrity.py --provider all --start-date 2026-05-06 --end-date 2026-05-06
+```
+
+**Step 5 — EOD Tick Aggregation**  
+Generate 1-minute OHLCV bars from the imported ticks for analytics.
+```powershell
+.\scripts\run_eod_tick_aggregation.bat --date 2026-05-06
+```
+
+**Full Pipeline One-Liner (Bash/PowerShell compatible)**  
+For automated workflows, chain all steps:
+```powershell
+.\.venv\Scripts\python.exe scripts\lib\import_ticks_to_db.py --date 2026-05-06 && `
+.\.venv\Scripts\python.exe scripts\lib\verify_eod_live_capture.py --date 2026-05-06 && `
+.\.venv\Scripts\python.exe scripts\lib\audit_timezone_integrity.py --provider all --start-date 2026-05-06 --end-date 2026-05-06 && `
+.\scripts\run_eod_tick_aggregation.bat --date 2026-05-06
+```
+
 ### 🗂️ DB Greeks + Compression Migration
 Apply schema update script for Greeks columns and Timescale compression settings.
 ```powershell

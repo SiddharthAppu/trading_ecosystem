@@ -62,8 +62,8 @@ Contents:
 **Use case:** Run a full backtest or parameter optimisation over any date range using DB data, no running services needed.
 
 Contents:
-- `scripts/backtest_nifty_trend.py` — single-run backtest
-- `scripts/optimize_nifty_trend.py` — grid search optimizer
+- `scripts/strategy_backtest.py` — single-run backtest
+- `scripts/strategy_optimize.py` — grid search optimizer
 - `packages/trading_core/` — shared models
 - `config/` — DB credentials env
 - `docs/` — strategy documentation and this user guide
@@ -176,8 +176,8 @@ dist\
 > `START_REPLAY_KIT.ps1` is sourced from `scripts/START_REPLAY_KIT.ps1` in the workspace but placed at the **kit root** during build so you can run `.\START_REPLAY_KIT.ps1` directly without navigating to a subdirectory.
 
 **Backtest kit includes:**
-- `scripts/backtest_nifty_trend.py`
-- `scripts/optimize_nifty_trend.py`
+- `scripts/strategy_backtest.py`
+- `scripts/strategy_optimize.py`
 - `packages/trading_core/`
 - `START_BACKTEST_KIT.ps1` — one-click launcher at **kit root** (not scripts/)
 - `config/.env` (if present in workspace)
@@ -535,19 +535,19 @@ Show top 15 parameter combinations instead of default 10:
 Single backtest:
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\backtest_nifty_trend.py --from 2026-04-01 --to 2026-04-28
+.\.venv\Scripts\python.exe .\scripts\strategy_backtest.py --from 2026-04-01 --to 2026-04-28
 ```
 
 Grid search optimisation:
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\optimize_nifty_trend.py --from 2026-04-01 --to 2026-04-28 --top 10
+.\.venv\Scripts\python.exe .\scripts\strategy_optimize.py --from 2026-04-01 --to 2026-04-28 --top 10
 ```
 
 Custom symbol:
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\backtest_nifty_trend.py `
+.\.venv\Scripts\python.exe .\scripts\strategy_backtest.py `
   --from 2026-04-01 --to 2026-04-28 `
   --symbol "NSE_INDEX|Nifty 50"
 ```
@@ -875,7 +875,7 @@ asyncio.run(t())
 ### Backtest smoke test (quick sanity)
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\backtest_nifty_trend.py --from 2026-04-28 --to 2026-04-28
+.\.venv\Scripts\python.exe .\scripts\strategy_backtest.py --from 2026-04-28 --to 2026-04-28
 ```
 
 Should print a (possibly empty) trade table with no errors.

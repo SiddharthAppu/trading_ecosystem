@@ -131,7 +131,7 @@ The `replay_engine` streams historical index bars correctly, but the live strate
 
 ### Backtest script
 
-**File:** `scripts/backtest_nifty_trend.py`
+**File:** `scripts/strategy_backtest.py`
 
 Mirrors the live strategy logic exactly:
 - Aggregates 1m index bars to 5m
@@ -143,7 +143,7 @@ Mirrors the live strategy logic exactly:
 
 **Basic run:**
 ```powershell
-python scripts/backtest_nifty_trend.py `
+python scripts/strategy_backtest.py `
     --from 2026-04-01 --to 2026-04-28 `
     --export-trades trades.csv
 ```
@@ -167,20 +167,20 @@ python scripts/backtest_nifty_trend.py `
 
 ### Parameter optimizer
 
-**File:** `scripts/optimize_nifty_trend.py`
+**File:** `scripts/strategy_optimize.py`
 
 Runs the backtest for every combination in the GRID defined at the top of the script, then ranks by total PnL (or win rate or trade count).
 
 **Run:**
 ```powershell
-python scripts/optimize_nifty_trend.py `
+python scripts/strategy_optimize.py `
     --from 2026-04-01 --to 2026-04-28 `
     --top 10 --sort-by total_pnl
 ```
 
 **Sort options:** `total_pnl` · `win_rate_pct` · `total_trades`
 
-**Default search grid** (edit in `optimize_nifty_trend.py` to narrow or widen):
+**Default search grid** (edit in `strategy_optimize.py` to narrow or widen):
 
 | Parameter | Values searched |
 | :-------- | :-------------- |

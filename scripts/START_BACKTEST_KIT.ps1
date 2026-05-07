@@ -1,10 +1,10 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Astra Backtest Kit - Run NIFTY Trend Options backtest or parameter optimisation.
+    Astra Backtest Kit - Run strategy backtest or parameter optimisation.
 
 .DESCRIPTION
-    Runs backtest_nifty_trend.py or optimize_nifty_trend.py against historical data
+    Runs strategy_backtest.py or strategy_optimize.py against historical data
     in TimescaleDB. Prompts for a date range if not supplied via parameters.
     Requires only Python + DB credentials in config/.env — no running services needed.
 
@@ -56,16 +56,22 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # ── Resolve kit root ───────────────────────────────────────────────────────────
-$KIT_ROOT    = $PSScriptRoot
+$scriptDir = $PSScriptRoot
+$scriptDirLeaf = Split-Path -Path $scriptDir -Leaf
+if ($scriptDirLeaf -ieq "scripts") {
+    $KIT_ROOT = Split-Path -Path $scriptDir -Parent
+} else {
+    $KIT_ROOT = $scriptDir
+}
 $PYTHON_EXE  = "$KIT_ROOT\.venv\Scripts\python.exe"
-$BACKTEST_PY = "$KIT_ROOT\scripts\backtest_nifty_trend.py"
-$OPTIMIZE_PY = "$KIT_ROOT\scripts\optimize_nifty_trend.py"
+$BACKTEST_PY = "$KIT_ROOT\scripts\strategy_backtest.py"
+$OPTIMIZE_PY = "$KIT_ROOT\scripts\strategy_optimize.py"
 $GLOBAL_ENV  = if ($EnvFile) { if ([System.IO.Path]::IsPathRooted($EnvFile)) { $EnvFile } else { Join-Path $KIT_ROOT $EnvFile } } else { "$KIT_ROOT\config\.env" }
 
 # ── Banner ─────────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "    Astra Backtest Kit - NIFTY Trend Options Analyser     " -ForegroundColor Cyan
+Write-Host "      Astra Backtest Kit - Strategy Backtest Analyser      " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host ""
 

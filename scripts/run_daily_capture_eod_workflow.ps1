@@ -170,6 +170,7 @@ if ($invalidProviders.Count -gt 0) {
 # Step 3 - Wait until 09:00 IST if launched early, then start capture
 $RecorderProc = $null
 $captureFailed = $false
+$captureUsedLiveCounters = $false
 $istHHMM = [int]((Get-ISTNow).ToString("HHmm"))
 
 if ($istHHMM -ge 1545) {
@@ -248,6 +249,7 @@ if ($istHHMM -ge 1545) {
                 }
 
                 if ($useLiveCounters) {
+                    $captureUsedLiveCounters = $true
                     $fyersLive = [int]($fyersStatus.ticks_received_total)
                     $upstoxLive = [int]($upstoxStatus.ticks_received_total)
                     $totalLive = $fyersLive + $upstoxLive
@@ -307,26 +309,34 @@ if ($StartedCollector -and $CollectorProc) {
 Write-Host ""
 Write-Host "[7/7] Post-market pipeline for $TRADE_DATE..."
 $pipelineFailed = $false
+$runNoDbPipeline = ($EnableDB -eq "false") -or $captureUsedLiveCounters
 if ($captureFailed) {
     $pipelineFailed = $true
     Write-Host "  [WARN] Capture failed early; see recorder log above."
 }
 
-Write-Host "  [7a] EOD live capture verification..."
-& $PYTHON_EXE "$LIB_DIR\verify_eod_live_capture.py" --date $TRADE_DATE
-if ($LASTEXITCODE -ne 0) { $pipelineFailed = $true; Write-Host "  [WARN] verify_eod_live_capture reported failures." }
+if ($runNoDbPipeline) {
+    Write-Host "  [7a] EOD file capture verification (no_db mode)..."
+    & $PYTHON_EXE "$LIB_DIR\verify_eod_file_capture.py" --date $TRADE_DATE --tick-dir "$ROOT\services\data_collector\logs\ticks"
+    if ($LASTEXITCODE -ne 0) { $pipelineFailed = $true; Write-Host "  [WARN] verify_eod_file_capture reported failures." }
+    Write-Host "  [INFO] Skipping DB-dependent checks in no_db mode (timezone audit, aggregation, options sync)."
+} else {
+    Write-Host "  [7a] EOD live capture verification..."
+    & $PYTHON_EXE "$LIB_DIR\verify_eod_live_capture.py" --date $TRADE_DATE
+    if ($LASTEXITCODE -ne 0) { $pipelineFailed = $true; Write-Host "  [WARN] verify_eod_live_capture reported failures." }
 
-Write-Host "  [7b] Timezone integrity audit..."
-& $PYTHON_EXE "$LIB_DIR\audit_timezone_integrity.py" --provider all --start-date $TRADE_DATE --end-date $TRADE_DATE
-if ($LASTEXITCODE -ne 0) { $pipelineFailed = $true; Write-Host "  [WARN] audit_timezone_integrity reported failures." }
+    Write-Host "  [7b] Timezone integrity audit..."
+    & $PYTHON_EXE "$LIB_DIR\audit_timezone_integrity.py" --provider all --start-date $TRADE_DATE --end-date $TRADE_DATE
+    if ($LASTEXITCODE -ne 0) { $pipelineFailed = $true; Write-Host "  [WARN] audit_timezone_integrity reported failures." }
 
-Write-Host "  [7c] Tick aggregation (Fyers + Upstox)..."
-& "$ROOT\scripts\run_eod_tick_aggregation.bat" --date $TRADE_DATE
-if ($LASTEXITCODE -ne 0) { $pipelineFailed = $true; Write-Host "  [WARN] Tick aggregation reported failures." }
+    Write-Host "  [7c] Tick aggregation (Fyers + Upstox)..."
+    & "$ROOT\scripts\run_eod_tick_aggregation.bat" --date $TRADE_DATE
+    if ($LASTEXITCODE -ne 0) { $pipelineFailed = $true; Write-Host "  [WARN] Tick aggregation reported failures." }
 
-Write-Host "  [7d] Options Sync to Master (Enrichment)..."
-& $PYTHON_EXE "$LIB_DIR\sync_options_to_master.py" --date $TRADE_DATE
-if ($LASTEXITCODE -ne 0) { $pipelineFailed = $true; Write-Host "  [WARN] Options sync reported failures." }
+    Write-Host "  [7d] Options Sync to Master (Enrichment)..."
+    & $PYTHON_EXE "$LIB_DIR\sync_options_to_master.py" --date $TRADE_DATE
+    if ($LASTEXITCODE -ne 0) { $pipelineFailed = $true; Write-Host "  [WARN] Options sync reported failures." }
+}
 
 Write-Host "  [7e] DB backup..."
 & $PYTHON_EXE "$LIB_DIR\db_backup.py"
