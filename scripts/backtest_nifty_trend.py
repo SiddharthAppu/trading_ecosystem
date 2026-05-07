@@ -225,6 +225,11 @@ def run_backtest(
     sl_pct: float = 0.5,
     index_symbol: str = "NSE:NIFTY50-INDEX",
     lot_size: int = 75,
+    engine: str = "legacy",
+    strategy_name: str = "nifty_trend_options",
+    timeframe: str = "5m",
+    log_file: str = "logs/strategy_runtime/runtime.log",
+    run_name: str = "",
     verbose: bool = True,
 ) -> dict:
     """
@@ -256,6 +261,27 @@ def run_backtest(
     if not rows_1m:
         if verbose:
             print(f"  No index bars found for {index_symbol} in {from_date}→{to_date}")
+        if engine == "adapter":
+            return _run_strategy_adapter_mode(
+                bars_5m=[],
+                from_date=from_date,
+                to_date=to_date,
+                strategy_name=strategy_name,
+                timeframe=timeframe,
+                index_symbol=index_symbol,
+                ema_period=ema_period,
+                sma_period=sma_period,
+                macd_fast=macd_fast,
+                macd_slow=macd_slow,
+                macd_signal_period=macd_signal_period,
+                target_premium=target_premium,
+                premium_tolerance=premium_tolerance,
+                sl_pct=sl_pct,
+                lot_size=lot_size,
+                log_file=log_file,
+                run_name=run_name,
+                verbose=verbose,
+            )
         return {"trades": [], "summary": {}}
 
     bars_5m = aggregate_to_5m(rows_1m)
@@ -263,6 +289,28 @@ def run_backtest(
 
     if verbose:
         print(f"  Index: {len(rows_1m)} 1m bars → {len(bars_5m)} 5m bars")
+
+    if engine == "adapter":
+        return _run_strategy_adapter_mode(
+            bars_5m=bars_5m,
+            from_date=from_date,
+            to_date=to_date,
+            strategy_name=strategy_name,
+            timeframe=timeframe,
+            index_symbol=index_symbol,
+            ema_period=ema_period,
+            sma_period=sma_period,
+            macd_fast=macd_fast,
+            macd_slow=macd_slow,
+            macd_signal_period=macd_signal_period,
+            target_premium=target_premium,
+            premium_tolerance=premium_tolerance,
+            sl_pct=sl_pct,
+            lot_size=lot_size,
+            log_file=log_file,
+            run_name=run_name,
+            verbose=verbose,
+        )
 
     # 2. Indicators
     ema_vals = _calc_ema(closes, ema_period)
@@ -452,28 +500,121 @@ def run_backtest(
         print(f"  Avg win   : ₹{avg_win:>10,.2f}   Avg loss: ₹{avg_loss:>10,.2f}")
         print(f"{'─'*62}")
 
-    return {"trades": trades, "summary": summary}
+    result = {"trades": trades, "summary": summary}
+    return result
 
 
-# ── CLI ────────────────────────────────────────────────────────────────────────
+def _run_strategy_adapter_mode(
+    *,
+    bars_5m: list[dict],
+    from_date: str,
+    to_date: str,
+    strategy_name: str,
+    timeframe: str,
+    index_symbol: str,
+    ema_period: int,
+    sma_period: int,
+    macd_fast: int,
+    macd_slow: int,
+    macd_signal_period: int,
+    target_premium: float,
+    premium_tolerance: float,
+    sl_pct: float,
+    lot_size: int,
+    log_file: str,
+    run_name: str,
+    verbose: bool,
+) -> dict:
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+    try:
+        from services.strategy_runtime.offline_adapter.runner import run_strategy_adapter_backtest
+    except (ImportError, OSError, ValueError) as exc:
+        raise RuntimeError(f"Adapter runner unavailable: {exc}") from exc
+
+    adapter_result = run_strategy_adapter_backtest(
+        bars_5m=bars_5m,
+        from_date=from_date,
+        to_date=to_date,
+        strategy_name=strategy_name,
+        timeframe=timeframe,
+        symbol=index_symbol,
+        indicators=[f"ema_{ema_period}", f"sma_{sma_period}", "macd"],
+        strategy_params={
+            "quantity": lot_size,
+            "provider": "paper",
+            "underlying_symbol": index_symbol,
+            "target_premium": target_premium,
+            "premium_tolerance": premium_tolerance,
+            "stop_loss_premium_pct": sl_pct,
+            "strike_scan_count": 10,
+            "ema_period": ema_period,
+            "sma_period": sma_period,
+            "macd_fast": macd_fast,
+            "macd_slow": macd_slow,
+            "macd_signal": macd_signal_period,
+        },
+        log_file=log_file,
+        run_name=run_name or None,
+    )
+    if verbose:
+        print(f"\n  Adapter artifacts → journal={adapter_result.journal_path}")
+        print(f"  Adapter artifacts → summary={adapter_result.summary_path}")
+    return {
+        "trades": adapter_result.trades,
+        "summary": adapter_result.summary,
+    }
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Backtest nifty_trend_options with historical DB data"
     )
     parser.add_argument("--from", dest="from_date", required=True, help="YYYY-MM-DD")
-    parser.add_argument("--to",   dest="to_date",   required=True, help="YYYY-MM-DD")
-    parser.add_argument("--ema-period",         type=int,   default=20)
-    parser.add_argument("--sma-period",         type=int,   default=20)
-    parser.add_argument("--macd-fast",          type=int,   default=12)
-    parser.add_argument("--macd-slow",          type=int,   default=26)
-    parser.add_argument("--macd-signal",        type=int,   default=9)
-    parser.add_argument("--target-premium",     type=float, default=200.0)
-    parser.add_argument("--premium-tolerance",  type=float, default=50.0)
-    parser.add_argument("--sl-pct",             type=float, default=0.5,
-                        help="Stop-loss as fraction of entry premium (0.5 = 50%%)")
-    parser.add_argument("--lot-size",           type=int,   default=75)
-    parser.add_argument("--index-symbol",       default="NSE:NIFTY50-INDEX")
+    parser.add_argument("--to", dest="to_date", required=True, help="YYYY-MM-DD")
+    parser.add_argument("--ema-period", type=int, default=20)
+    parser.add_argument("--sma-period", type=int, default=20)
+    parser.add_argument("--macd-fast", type=int, default=12)
+    parser.add_argument("--macd-slow", type=int, default=26)
+    parser.add_argument("--macd-signal", type=int, default=9)
+    parser.add_argument("--target-premium", type=float, default=200.0)
+    parser.add_argument("--premium-tolerance", type=float, default=50.0)
+    parser.add_argument(
+        "--sl-pct",
+        type=float,
+        default=0.5,
+        help="Stop-loss as fraction of entry premium (0.5 = 50%%)",
+    )
+    parser.add_argument("--lot-size", type=int, default=75)
+    parser.add_argument("--index-symbol", default="NSE:NIFTY50-INDEX")
+    parser.add_argument(
+        "--engine",
+        choices=["legacy", "adapter"],
+        default="legacy",
+        help="Execution engine. Default legacy preserves current behavior.",
+    )
+    parser.add_argument(
+        "--strategy-name",
+        default="nifty_trend_options",
+        help="Strategy name metadata written into adapter artifacts.",
+    )
+    parser.add_argument(
+        "--timeframe",
+        default="5m",
+        help="Timeframe metadata written into adapter artifacts.",
+    )
+    parser.add_argument(
+        "--log-file",
+        default="logs/strategy_runtime/runtime.log",
+        help="Main log path used by adapter artifacts.",
+    )
+    parser.add_argument(
+        "--run-name",
+        default="",
+        help="Optional run name for adapter artifacts.",
+    )
     parser.add_argument(
         "--export-trades", metavar="FILE",
         help="Export trades to CSV (e.g. trades.csv)"
@@ -496,6 +637,11 @@ def main() -> None:
             sl_pct=args.sl_pct,
             lot_size=args.lot_size,
             index_symbol=args.index_symbol,
+            engine=args.engine,
+            strategy_name=args.strategy_name,
+            timeframe=args.timeframe,
+            log_file=args.log_file,
+            run_name=args.run_name,
         )
         if args.export_trades and result["trades"]:
             import csv

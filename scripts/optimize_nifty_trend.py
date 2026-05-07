@@ -76,6 +76,32 @@ def main() -> None:
     parser.add_argument("--lot-size",     type=int, default=75)
     parser.add_argument("--index-symbol", default="NSE:NIFTY50-INDEX")
     parser.add_argument(
+        "--engine",
+        choices=["legacy", "adapter"],
+        default="legacy",
+        help="Execution engine. Default legacy preserves current behavior.",
+    )
+    parser.add_argument(
+        "--strategy-name",
+        default="nifty_trend_options",
+        help="Strategy name metadata used when engine=adapter.",
+    )
+    parser.add_argument(
+        "--timeframe",
+        default="5m",
+        help="Timeframe metadata used when engine=adapter.",
+    )
+    parser.add_argument(
+        "--log-file",
+        default="logs/strategy_runtime/runtime.log",
+        help="Main log path used when engine=adapter.",
+    )
+    parser.add_argument(
+        "--run-name-prefix",
+        default="opt",
+        help="Run name prefix used when engine=adapter.",
+    )
+    parser.add_argument(
         "--top", type=int, default=10, help="How many top results to display"
     )
     parser.add_argument(
@@ -88,6 +114,12 @@ def main() -> None:
         "--min-trades", type=int, default=3,
         help="Exclude param sets with fewer than this many trades (avoids overfitting to lucky 1-trade runs)"
     )
+    parser.add_argument(
+        "--max-combos",
+        type=int,
+        default=0,
+        help="Optional cap for number of grid combinations to execute (0 = all).",
+    )
     args = parser.parse_args()
 
     n_combos = _combo_count()
@@ -98,6 +130,10 @@ def main() -> None:
 
     keys = list(GRID.keys())
     combos = list(product(*[GRID[k] for k in keys]))
+    if args.max_combos > 0:
+        combos = combos[: args.max_combos]
+        n_combos = len(combos)
+        print(f"Combo cap     : {args.max_combos}")
 
     conn = psycopg2.connect(DATABASE_URL)
     results: list[dict] = []
@@ -120,13 +156,18 @@ def main() -> None:
                     sl_pct=params["sl_pct"],
                     lot_size=args.lot_size,
                     index_symbol=args.index_symbol,
+                    engine=args.engine,
+                    strategy_name=args.strategy_name,
+                    timeframe=args.timeframe,
+                    log_file=args.log_file,
+                    run_name=f"{args.run_name_prefix}_{idx:04d}" if args.engine == "adapter" else "",
                     verbose=False,
                 )
                 summary = result["summary"]
                 if summary.get("total_trades", 0) >= args.min_trades:
                     row = {**summary, **params}
                     results.append(row)
-            except Exception as exc:
+            except (RuntimeError, OSError, ValueError, TypeError, psycopg2.Error) as exc:
                 print(f"  combo #{idx} failed: {exc}")
 
             if (idx + 1) % 100 == 0 or (idx + 1) == n_combos:

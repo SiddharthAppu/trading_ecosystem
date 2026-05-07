@@ -24,18 +24,31 @@
 .PARAMETER Symbol
     Underlying symbol. Default: reads from config/.env or uses adapter default.
 
+.PARAMETER Smoke
+    Runs a quick adapter backtest smoke check (forces Mode=backtest, Engine=adapter,
+    and auto-generates a run name when not provided).
+
 .EXAMPLE
     .\START_BACKTEST_KIT.ps1
     .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28
     .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -Mode optimize -Top 15
     .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -Symbol "NSE_INDEX|Nifty 50"
+    .\START_BACKTEST_KIT.ps1 -Smoke -From 2026-04-28 -To 2026-04-28
 #>
 param(
     [string]$From   = "",
     [string]$To     = "",
     [ValidateSet("backtest", "optimize")]
     [string]$Mode   = "backtest",
+    [ValidateSet("legacy", "adapter")]
+    [string]$Engine = "legacy",
     [int]$Top       = 10,
+    [string]$StrategyName = "nifty_trend_options",
+    [string]$Timeframe = "5m",
+    [string]$LogFile = "logs/strategy_runtime/runtime.log",
+    [string]$RunName = "",
+    [string]$RunNamePrefix = "opt",
+    [switch]$Smoke,
     [string]$Symbol = "",
     [string]$EnvFile = ""
 )
@@ -56,6 +69,21 @@ Write-Host "    Astra Backtest Kit - NIFTY Trend Options Analyser     " -Foregro
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host ""
 
+# ── Smoke mode normalization ──────────────────────────────────────────────────
+if ($Smoke) {
+    if ($Mode -ne "backtest") {
+        Write-Host "[INFO] Smoke mode forcing Mode=backtest" -ForegroundColor DarkGray
+        $Mode = "backtest"
+    }
+    if ($Engine -ne "adapter") {
+        Write-Host "[INFO] Smoke mode forcing Engine=adapter" -ForegroundColor DarkGray
+        $Engine = "adapter"
+    }
+    if ([string]::IsNullOrWhiteSpace($RunName)) {
+        $RunName = "smoke_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    }
+}
+
 # ── Pre-flight checks ──────────────────────────────────────────────────────────
 if (-not (Test-Path $PYTHON_EXE)) {
     Write-Host "[ERROR] Python virtual environment not found at .venv\" -ForegroundColor Red
@@ -72,7 +100,7 @@ if (-not (Test-Path $targetScript)) {
 }
 
 # ── Load global env (DB credentials etc.) ─────────────────────────────────────
-function Load-EnvFile([string]$Path) {
+function Import-EnvFile([string]$Path) {
     if (-not (Test-Path $Path)) { return }
     foreach ($line in (Get-Content $Path -Encoding UTF8)) {
         $t = $line.Trim()
@@ -89,7 +117,7 @@ function Load-EnvFile([string]$Path) {
 }
 
 if (Test-Path $GLOBAL_ENV) {
-    Load-EnvFile $GLOBAL_ENV
+    Import-EnvFile $GLOBAL_ENV
     Write-Host "[INFO] Loaded credentials from $GLOBAL_ENV" -ForegroundColor DarkGray
 } else {
     Write-Host "[WARN] Env file not found: $GLOBAL_ENV" -ForegroundColor Yellow
@@ -106,8 +134,8 @@ if ($From -eq "") {
 
 if ($To -eq "") {
     $defaultTo = (Get-Date).ToString("yyyy-MM-dd")
-    $input = Read-Host "Enter end date [YYYY-MM-DD] (default: $defaultTo)"
-    $To = if ($input.Trim() -eq "") { $defaultTo } else { $input.Trim() }
+    $toInput = Read-Host "Enter end date [YYYY-MM-DD] (default: $defaultTo)"
+    $To = if ($toInput.Trim() -eq "") { $defaultTo } else { $toInput.Trim() }
 }
 
 # ── Validate date format ───────────────────────────────────────────────────────
@@ -120,22 +148,42 @@ if ($From -notmatch $datePattern -or $To -notmatch $datePattern) {
 # ── Build argument list ────────────────────────────────────────────────────────
 $args_list = @("--from", $From, "--to", $To)
 
+$args_list += @(
+    "--engine", $Engine,
+    "--strategy-name", $StrategyName,
+    "--timeframe", $Timeframe,
+    "--log-file", $LogFile
+)
+
 if ($Symbol -ne "") {
-    $args_list += @("--symbol", $Symbol)
+    $args_list += @("--index-symbol", $Symbol)
 }
 
 if ($Mode -eq "optimize") {
     $args_list += @("--top", $Top)
+    $args_list += @("--run-name-prefix", $RunNamePrefix)
+} elseif ($RunName -ne "") {
+    $args_list += @("--run-name", $RunName)
 }
 
 # ── Print run summary ──────────────────────────────────────────────────────────
 Write-Host "Mode       : $Mode"              -ForegroundColor White
+Write-Host "Engine     : $Engine"            -ForegroundColor White
 Write-Host "Date range : $From -> $To"       -ForegroundColor White
+Write-Host "Strategy   : $StrategyName"      -ForegroundColor White
+Write-Host "Timeframe  : $Timeframe"         -ForegroundColor White
+Write-Host "Log file   : $LogFile"           -ForegroundColor White
 if ($Mode -eq "optimize") {
     Write-Host "Top results: $Top"            -ForegroundColor White
+    Write-Host "Run prefix : $RunNamePrefix"  -ForegroundColor White
+} elseif ($RunName -ne "") {
+    Write-Host "Run name   : $RunName"         -ForegroundColor White
 }
 if ($Symbol -ne "") {
     Write-Host "Symbol     : $Symbol"         -ForegroundColor White
+}
+if ($Smoke) {
+    Write-Host "Smoke      : ON"              -ForegroundColor White
 }
 Write-Host ""
 
