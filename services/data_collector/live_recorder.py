@@ -67,6 +67,8 @@ class LiveTickRecorder:
         self._ws_connected = False
         self.file_logger = TickFileLogger()
         self.enable_db_override: Optional[bool] = None
+        self.ticks_received_total = 0
+        self.greeks_received_total = 0
         
         # Default to file-first capture unless explicitly enabled.
         self.enable_db = os.getenv("ASTRA_RECORDER_ENABLE_DB", "false").lower() in ("true", "1", "yes")
@@ -265,6 +267,7 @@ class LiveTickRecorder:
 
     def _on_fyers_message(self, message):
         if not isinstance(message, dict) or message.get("type") in ("cn", "ful", "sub"): return
+        self.ticks_received_total += 1
         
         # Fyers LiteMode=False provides rich market depth via these standard internal keys
         vol = message.get("v") or message.get("vol_traded_today") or 0
@@ -292,6 +295,7 @@ class LiveTickRecorder:
             "iv": message.get("iv") or message.get("implied_volatility"),
         }
         if any(value is not None for value in greeks.values()):
+            self.greeks_received_total += 1
             self.greeks_buffer.append(
                 (
                     datetime.now(timezone.utc),
@@ -371,6 +375,7 @@ class LiveTickRecorder:
             ltp = self._nested_find_first(feed_payload, ("ltp", "lastPrice", "lp"))
             if ltp is None:
                 continue
+            self.ticks_received_total += 1
             volume = self._nested_find_first(feed_payload, ("vtt", "volume", "volTradedToday")) or 0
             oi = self._nested_find_first(feed_payload, ("oi", "open_interest", "openInterest")) or 0
             bid, ask = self._extract_upstox_bid_ask(feed_payload)
@@ -390,6 +395,7 @@ class LiveTickRecorder:
             ))
 
             if any(value is not None for value in greeks.values()):
+                self.greeks_received_total += 1
                 self.greeks_buffer.append(
                     (
                         datetime.now(timezone.utc),
@@ -421,6 +427,8 @@ class LiveTickRecorder:
         if not self.adapter.validate_token(): return "Token invalid"
 
         logger.info("Starting recorder for provider=%s mode=%s db_persistence=%s", self.provider_name, self.stream_mode, self._db_mode_label())
+        self.ticks_received_total = 0
+        self.greeks_received_total = 0
         
         self.is_running = True
         asyncio.create_task(self.save_ticks_to_db())
@@ -505,6 +513,8 @@ class LiveTickRecorder:
             "ws_connected": self._ws_connected,
             "enable_db": self._should_persist_to_db(),
             "enable_db_override": self.enable_db_override,
+            "ticks_received_total": self.ticks_received_total,
+            "greeks_received_total": self.greeks_received_total,
         }
 
     async def event_generator(self):

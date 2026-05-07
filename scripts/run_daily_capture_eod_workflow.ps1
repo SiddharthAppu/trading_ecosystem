@@ -223,6 +223,8 @@ if ($istHHMM -ge 1545) {
                 }
 
                 $tickCounts = $null
+                $fyersStatus = $null
+                $upstoxStatus = $null
                 try {
                     $tickResp = Invoke-WebRequest -UseBasicParsing "http://localhost:8080/ticks/count-today" -TimeoutSec 5
                     $tickCounts = $tickResp.Content | ConvertFrom-Json
@@ -230,7 +232,28 @@ if ($istHHMM -ge 1545) {
                     # Silently continue if count fails; capture may still be running
                 }
 
-                if ($tickCounts -and $tickCounts.status -eq "success") {
+                try {
+                    $fyersStatusResp = Invoke-WebRequest -UseBasicParsing "http://localhost:8080/recorder/status?provider=fyers" -TimeoutSec 5
+                    $fyersStatus = $fyersStatusResp.Content | ConvertFrom-Json
+                } catch {}
+
+                try {
+                    $upstoxStatusResp = Invoke-WebRequest -UseBasicParsing "http://localhost:8080/recorder/status?provider=upstox" -TimeoutSec 5
+                    $upstoxStatus = $upstoxStatusResp.Content | ConvertFrom-Json
+                } catch {}
+
+                $useLiveCounters = $false
+                if ($fyersStatus -and $upstoxStatus) {
+                    $useLiveCounters = (-not [bool]$fyersStatus.enable_db) -and (-not [bool]$upstoxStatus.enable_db)
+                }
+
+                if ($useLiveCounters) {
+                    $fyersLive = [int]($fyersStatus.ticks_received_total)
+                    $upstoxLive = [int]($upstoxStatus.ticks_received_total)
+                    $totalLive = $fyersLive + $upstoxLive
+                    Write-Host "  IST $((Get-ISTNow).ToString('HH:mm:ss')) - LIVE Fyers: $fyersLive | Upstox: $upstoxLive | Total: $totalLive"
+                }
+                elseif ($tickCounts -and $tickCounts.status -eq "success") {
                     Write-Host "  IST $((Get-ISTNow).ToString('HH:mm:ss')) - Fyers: $($tickCounts.fyers_ticks) | Upstox: $($tickCounts.upstox_ticks) | Total: $($tickCounts.total_ticks)"
                 } else {
                     Write-Host "  IST $((Get-ISTNow).ToString('HH:mm:ss')) - capture active (tick count unavailable)"
