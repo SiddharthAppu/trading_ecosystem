@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 from datetime import date
 from typing import Optional
@@ -141,7 +142,10 @@ class StrategyImpl(Strategy):
         target_premium = float(self.ctx.get_param("target_premium", 200.0))
         tolerance = float(self.ctx.get_param("premium_tolerance", 50.0))
         sl_pct = float(self.ctx.get_param("stop_loss_premium_pct", 0.5))
-        qty = int(self.ctx.get_param("quantity", 1))
+        lot_quantity = int(self.ctx.get_param("lot_quantity", 1))
+        lot_size = int(self.ctx.get_param("lot_size", 1))
+        capital_model = str(self.ctx.get_param("capital_model", "non_compounding")).strip().lower()
+        initial_capital = float(self.ctx.get_param("initial_capital", 100000.0))
         scan_count = int(self.ctx.get_param("strike_scan_count", 10))
         configured_expiry = self.ctx.get_param("option_expiry", "")
         resolver = getattr(self.ctx, "market_data_resolver", None)
@@ -238,6 +242,15 @@ class StrategyImpl(Strategy):
             return
 
         # --- 4. Enter position ---
+        effective_lots = max(1, lot_quantity)
+        if capital_model == "compounding" and self.ctx.portfolio is not None:
+            capital_available = initial_capital + float(self.ctx.portfolio.get_total_pnl({}))
+            one_lot_cost = float(best_price) * max(1, lot_size)
+            if one_lot_cost > 0:
+                effective_lots = max(1, math.floor(capital_available / one_lot_cost))
+
+        qty = max(1, effective_lots * max(1, lot_size))
+
         risk = best_price * sl_pct
         target_p = best_price + 2 * risk
         stop_p = best_price - risk

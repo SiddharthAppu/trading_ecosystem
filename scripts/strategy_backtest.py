@@ -225,6 +225,9 @@ def run_backtest(
     sl_pct: float = 0.5,
     index_symbol: str = "NSE:NIFTY50-INDEX",
     lot_size: int = 75,
+    lot_quantity: int = 1,
+    initial_capital: float = 100000.0,
+    capital_model: str = "non_compounding",
     engine: str = "adapter",
     strategy_name: str = "nifty_trend_options",
     timeframe: str = "5m",
@@ -252,7 +255,7 @@ def run_backtest(
         )
         print(
             f"  target_premium={target_premium}  ±{premium_tolerance}  "
-            f"SL={sl_pct*100:.0f}%  lot={lot_size}"
+            f"SL={sl_pct*100:.0f}%  lots={lot_quantity}  lot_size={lot_size}"
         )
         print(f"{'='*62}")
 
@@ -278,6 +281,9 @@ def run_backtest(
                 premium_tolerance=premium_tolerance,
                 sl_pct=sl_pct,
                 lot_size=lot_size,
+                lot_quantity=lot_quantity,
+                initial_capital=initial_capital,
+                capital_model=capital_model,
                 log_file=log_file,
                 run_name=run_name,
                 verbose=verbose,
@@ -307,6 +313,9 @@ def run_backtest(
             premium_tolerance=premium_tolerance,
             sl_pct=sl_pct,
             lot_size=lot_size,
+            lot_quantity=lot_quantity,
+            initial_capital=initial_capital,
+            capital_model=capital_model,
             log_file=log_file,
             run_name=run_name,
             verbose=verbose,
@@ -521,6 +530,9 @@ def _run_strategy_adapter_mode(
     premium_tolerance: float,
     sl_pct: float,
     lot_size: int,
+    lot_quantity: int,
+    initial_capital: float,
+    capital_model: str,
     log_file: str,
     run_name: str,
     verbose: bool,
@@ -543,7 +555,10 @@ def _run_strategy_adapter_mode(
         symbol=index_symbol,
         indicators=[f"ema_{ema_period}", f"sma_{sma_period}", "macd"],
         strategy_params={
-            "quantity": lot_size,
+            "lot_quantity": lot_quantity,
+            "lot_size": lot_size,
+            "initial_capital": initial_capital,
+            "capital_model": capital_model,
             "provider": "paper",
             "underlying_symbol": index_symbol,
             "target_premium": target_premium,
@@ -588,6 +603,19 @@ def main() -> None:
         help="Stop-loss as fraction of entry premium (0.5 = 50%%)",
     )
     parser.add_argument("--lot-size", type=int, default=75)
+    parser.add_argument("--lot-quantity", type=int, default=1)
+    parser.add_argument(
+        "--initial-capital",
+        type=float,
+        default=100000.0,
+        help="Initial capital baseline used by adapter capital model.",
+    )
+    parser.add_argument(
+        "--capital-model",
+        choices=["non_compounding", "compounding"],
+        default="non_compounding",
+        help="Capital model used by adapter runner.",
+    )
     parser.add_argument("--index-symbol", default="NSE:NIFTY50-INDEX")
     parser.add_argument(
         "--strategy-name",
@@ -630,6 +658,9 @@ def main() -> None:
             premium_tolerance=args.premium_tolerance,
             sl_pct=args.sl_pct,
             lot_size=args.lot_size,
+            lot_quantity=args.lot_quantity,
+            initial_capital=args.initial_capital,
+            capital_model=args.capital_model,
             index_symbol=args.index_symbol,
             engine="adapter",
             strategy_name=args.strategy_name,

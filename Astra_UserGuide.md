@@ -250,8 +250,10 @@ STRATEGY_RUNTIME_PROVIDER=fyers
 STRATEGY_RUNTIME_SYMBOL=NSE:NIFTY50-INDEX
 STRATEGY_RUNTIME_TIMEFRAME=1m
 STRATEGY_RUNTIME_STRATEGY=nifty_trend_options
-STRATEGY_RUNTIME_QUANTITY=1
+STRATEGY_RUNTIME_LOT_QUANTITY=1
+STRATEGY_RUNTIME_LOT_SIZE=75
 STRATEGY_RUNTIME_INITIAL_CAPITAL=100000
+STRATEGY_RUNTIME_CAPITAL_MODEL=non_compounding
 STRATEGY_RUNTIME_STOP_LOSS_PCT=0.60
 STRATEGY_RUNTIME_REPLAY_WS_URL=ws://localhost:8765
 STRATEGY_RUNTIME_REPLAY_SPEED=5
@@ -711,7 +713,7 @@ In your `.env` file, these parameters control the **RuntimeRiskManager**:
 |---|---|---|
 | `STRATEGY_RUNTIME_STOP_LOSS_PCT` | `0.01` (1%) | Hard stop loss relative to entry price. |
 | `STRATEGY_RUNTIME_TRAILING_STOP_PCT` | `0.015` (1.5%) | Automatically trails the price at a 1.5% distance. |
-| `STRATEGY_RUNTIME_MAX_POSITION_QTY` | `1` | Maximum quantity allowed for any single symbol. |
+| `STRATEGY_RUNTIME_MAX_POSITION_LOTS` | `1` | Maximum lots allowed for any single symbol. |
 
 **Important:** If the price hits your 1% Stop Loss, the **Engine** will force-exit the position and record a `STOP_LOSS_EXIT` in the journal, even if the strategy logic hasn't triggered an exit yet.
 
@@ -737,33 +739,44 @@ python .\scripts\lib\import_ticks_to_db.py --date 2026-05-06 --dir .\logs\ticks
 
 ## 12. Configuration Reference
 
-### strategy_runtime.paper_replay.env — full key list
+### strategy_runtime.paper_replay.env — key applicability by capital mode
 
-| Key | Description | Example |
-|---|---|---|
-| `STRATEGY_RUNTIME_FEED_SOURCE` | `broker` or `replay_ws` | `replay_ws` |
-| `STRATEGY_RUNTIME_PROVIDER` | Broker provider namespace | `fyers` |
-| `STRATEGY_RUNTIME_SYMBOL` | Underlying symbol | `NSE:NIFTY50-INDEX` |
-| `STRATEGY_RUNTIME_TIMEFRAME` | Bar timeframe | `1m` |
-| `STRATEGY_RUNTIME_STRATEGY` | Strategy module name | `nifty_trend_options` |
-| `STRATEGY_RUNTIME_QUANTITY` | Lots per trade | `1` |
-| `STRATEGY_RUNTIME_INITIAL_CAPITAL` | Starting capital (Rs) | `100000` |
-| `STRATEGY_RUNTIME_STOP_LOSS_PCT` | Stop loss % (0.60 = 60%) | `0.60` |
-| `STRATEGY_RUNTIME_REPLAY_WS_URL` | Replay engine WebSocket URL | `ws://localhost:8765` |
-| `STRATEGY_RUNTIME_REPLAY_SPEED` | Replay speed multiplier | `5` |
-| `STRATEGY_RUNTIME_REPLAY_START_TIME` | ISO8601 replay start | `2026-04-15T09:15:00+05:30` |
-| `STRATEGY_RUNTIME_REPLAY_END_TIME` | ISO8601 replay end | `2026-04-15T15:30:00+05:30` |
-| `STRATEGY_RUNTIME_REPLAY_DATA_TYPE` | Data type streamed by replay engine | `ohlcv_1m` or `market_ticks` |
-| `STRATEGY_RUNTIME_INDICATOR_INPUT_MODE` | How indicators receive data | `bars_1m` or `ticks` |
-| `TELEGRAM_ENABLED` | Enable Telegram alerts | `false` |
-| `NIFTY_PREMIUM_TARGET` | Target option premium (Rs) | `200.0` |
-| `NIFTY_PREMIUM_TOLERANCE` | Premium tolerance window (Rs) | `30.0` |
-| `NIFTY_REWARD_RISK_RATIO` | Exit target as multiple of stop | `2.0` |
-| `NIFTY_EMA_PERIOD` | EMA period for trend | `20` |
-| `NIFTY_SMA_PERIOD` | SMA period for trend | `20` |
-| `NIFTY_MACD_FAST` | MACD fast EMA | `12` |
-| `NIFTY_MACD_SLOW` | MACD slow EMA | `26` |
-| `NIFTY_MACD_SIGNAL` | MACD signal line | `9` |
+Modes:
+- `non_compounding`: Trade size remains `STRATEGY_RUNTIME_LOT_QUANTITY` lots. In adapter backtest/optimize runs, capital is refilled to baseline after losses.
+- `compounding`: Trade size scales with available capital in lot increments.
+
+| Key | Description | Applies To | Example |
+|---|---|---|---|
+| `STRATEGY_RUNTIME_FEED_SOURCE` | `broker` or `replay_ws` | Both | `replay_ws` |
+| `STRATEGY_RUNTIME_PROVIDER` | Broker provider namespace | Both | `fyers` |
+| `STRATEGY_RUNTIME_SYMBOL` | Underlying symbol | Both | `NSE:NIFTY50-INDEX` |
+| `STRATEGY_RUNTIME_TIMEFRAME` | Bar timeframe | Both | `1m` |
+| `STRATEGY_RUNTIME_STRATEGY` | Strategy module name | Both | `nifty_trend_options` |
+| `STRATEGY_RUNTIME_LOT_QUANTITY` | Base lots per trade | Both | `1` |
+| `STRATEGY_RUNTIME_LOT_SIZE` | Units per lot for the instrument | Both | `75` |
+| `STRATEGY_RUNTIME_INITIAL_CAPITAL` | Starting capital (Rs) | Both | `100000` |
+| `STRATEGY_RUNTIME_CAPITAL_MODEL` | Position sizing capital mode | Both | `non_compounding` |
+| `STRATEGY_RUNTIME_MAX_POSITION_LOTS` | Maximum lots allowed | Both | `1` |
+| `STRATEGY_RUNTIME_STOP_LOSS_PCT` | Stop loss % (0.60 = 60%) | Both | `0.60` |
+| `STRATEGY_RUNTIME_REPLAY_WS_URL` | Replay engine WebSocket URL | Replay only | `ws://localhost:8765` |
+| `STRATEGY_RUNTIME_REPLAY_SPEED` | Replay speed multiplier | Replay only | `5` |
+| `STRATEGY_RUNTIME_REPLAY_START_TIME` | ISO8601 replay start | Replay only | `2026-04-15T09:15:00+05:30` |
+| `STRATEGY_RUNTIME_REPLAY_END_TIME` | ISO8601 replay end | Replay only | `2026-04-15T15:30:00+05:30` |
+| `STRATEGY_RUNTIME_REPLAY_DATA_TYPE` | Data type streamed by replay engine | Replay only | `ohlcv_1m` or `market_ticks` |
+| `STRATEGY_RUNTIME_INDICATOR_INPUT_MODE` | How indicators receive data | Replay only | `bars_1m` or `ticks` |
+| `TELEGRAM_ENABLED` | Enable Telegram alerts | Both | `false` |
+| `NIFTY_PREMIUM_TARGET` | Target option premium (Rs) | Strategy-specific | `200.0` |
+| `NIFTY_PREMIUM_TOLERANCE` | Premium tolerance window (Rs) | Strategy-specific | `30.0` |
+| `NIFTY_REWARD_RISK_RATIO` | Exit target as multiple of stop | Strategy-specific | `2.0` |
+| `NIFTY_EMA_PERIOD` | EMA period for trend | Strategy-specific | `20` |
+| `NIFTY_SMA_PERIOD` | SMA period for trend | Strategy-specific | `20` |
+| `NIFTY_MACD_FAST` | MACD fast EMA | Strategy-specific | `12` |
+| `NIFTY_MACD_SLOW` | MACD slow EMA | Strategy-specific | `26` |
+| `NIFTY_MACD_SIGNAL` | MACD signal line | Strategy-specific | `9` |
+
+Capital + refill behavior in adapter backtest/optimize mode:
+- `non_compounding`: uses configured lot quantity; when capital dips below initial capital after a closed trade, runtime emits `INITIAL_CAPITAL_REFILL` and tops capital back to baseline.
+- `compounding`: lot quantity scales with available capital; refill occurs only if capital falls to or below zero, allowing continuity of simulation runs.
 
 ### config/.env — global credentials
 

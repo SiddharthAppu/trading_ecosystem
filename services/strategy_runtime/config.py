@@ -41,9 +41,11 @@ class RuntimeSettings:
     lookback_bars: int = 120
     strategy_name: str = "ema_cross"
     strategy_class_path: str = ""
-    quantity: int = 1
+    lot_quantity: int = 1
+    lot_size: int = 1
     initial_capital: float = 100000.0
-    max_position_quantity: int = 1
+    max_position_lots: int = 1
+    capital_model: str = "non_compounding"
     max_notional_per_trade: float = 250000.0
     stop_loss_pct: float = 0.01
     trailing_stop_pct: float = 0.015
@@ -63,6 +65,10 @@ class RuntimeSettings:
 
     @classmethod
     def from_env(cls) -> "RuntimeSettings":
+        capital_model = os.getenv("STRATEGY_RUNTIME_CAPITAL_MODEL", "non_compounding").strip().lower()
+        if capital_model not in {"non_compounding", "compounding"}:
+            capital_model = "non_compounding"
+
         return cls(
             feed_source=os.getenv("STRATEGY_RUNTIME_FEED_SOURCE", "broker").strip().lower(),
             provider=os.getenv("STRATEGY_RUNTIME_PROVIDER", "upstox").strip().lower(),
@@ -73,9 +79,11 @@ class RuntimeSettings:
             lookback_bars=int(os.getenv("STRATEGY_RUNTIME_LOOKBACK_BARS", "120")),
             strategy_name=os.getenv("STRATEGY_RUNTIME_STRATEGY", "ema_cross").strip().lower(),
             strategy_class_path=os.getenv("STRATEGY_RUNTIME_STRATEGY_CLASS", "").strip(),
-            quantity=int(os.getenv("STRATEGY_RUNTIME_QUANTITY", "1")),
+            lot_quantity=int(os.getenv("STRATEGY_RUNTIME_LOT_QUANTITY", "1")),
+            lot_size=int(os.getenv("STRATEGY_RUNTIME_LOT_SIZE", "1")),
             initial_capital=float(os.getenv("STRATEGY_RUNTIME_INITIAL_CAPITAL", "100000")),
-            max_position_quantity=int(os.getenv("STRATEGY_RUNTIME_MAX_POSITION_QTY", "1")),
+            max_position_lots=int(os.getenv("STRATEGY_RUNTIME_MAX_POSITION_LOTS", "1")),
+            capital_model=capital_model,
             max_notional_per_trade=float(os.getenv("STRATEGY_RUNTIME_MAX_NOTIONAL", "250000")),
             stop_loss_pct=float(os.getenv("STRATEGY_RUNTIME_STOP_LOSS_PCT", "0.01")),
             trailing_stop_pct=float(os.getenv("STRATEGY_RUNTIME_TRAILING_STOP_PCT", "0.015")),

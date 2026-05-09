@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -64,7 +65,16 @@ def _append_lines(path: Path, lines: list[str]) -> None:
         handle.write("\n".join(lines) + "\n")
 
 
-def _summarize_trades(trades: list[dict[str, Any]], bars_5m: list[dict[str, Any]]) -> dict[str, Any]:
+def _summarize_trades(
+    trades: list[dict[str, Any]],
+    bars_5m: list[dict[str, Any]],
+    *,
+    capital_model: str,
+    initial_capital: float,
+    ending_capital: float,
+    refill_events: int,
+    refill_amount: float,
+) -> dict[str, Any]:
     pnls = [float(trade.get("pnl", 0.0)) for trade in trades]
     wins = [pnl for pnl in pnls if pnl > 0]
     losses = [pnl for pnl in pnls if pnl <= 0]
@@ -106,8 +116,12 @@ def _summarize_trades(trades: list[dict[str, Any]], bars_5m: list[dict[str, Any]
         "min_profit": round(min_profit, 2),
         "min_loss": round(min_loss, 2),
         "max_consecutive_loss_trades": max_loss_streak,
-        "capital_model": "fixed_quantity_non_compounding",
+        "capital_model": capital_model,
         "pnl_model": "additive_per_trade",
+        "initial_capital": round(initial_capital, 2),
+        "ending_capital": round(ending_capital, 2),
+        "refill_events": int(refill_events),
+        "refill_amount": round(refill_amount, 2),
     }
 
 
@@ -160,10 +174,28 @@ async def _run_strategy_adapter_backtest(
         log_file=log_file,
     )
 
+    initial_capital = float(strategy_params.get("initial_capital", 100000.0))
+    lot_size = max(1, int(strategy_params.get("lot_size", 1)))
+    lot_quantity = max(1, int(strategy_params.get("lot_quantity", 1)))
+    capital_model = str(strategy_params.get("capital_model", "non_compounding")).strip().lower()
+
+    capital_available = initial_capital
+    refill_events = 0
+    refill_amount = 0.0
+
+    def _journal_capital_context() -> dict[str, Any]:
+        return {
+            "initial_capital": float(initial_capital),
+            "capital_before_event": float(capital_available),
+            "capital_after_event": float(capital_available),
+            "capital_available": float(capital_available),
+        }
+
     journal = JournalManager(
         journal_path.as_posix(),
         strategy_name=strategy_name,
         timeframe=timeframe,
+        capital_context_provider=_journal_capital_context,
     )
     await journal.log_run_header(
         symbol=symbol,
@@ -180,11 +212,15 @@ async def _run_strategy_adapter_backtest(
     )
 
     event_bus = EventBus()
-    portfolio = PortfolioManager(initial_capital=1_000_000)
+    portfolio = PortfolioManager(initial_capital=initial_capital)
     params = load_strategy_params(strategy_name)
     params.update(strategy_params)
     params.setdefault("provider", "paper")
     params.setdefault("timeframe", timeframe)
+    params.setdefault("lot_size", lot_size)
+    params.setdefault("lot_quantity", lot_quantity)
+    params.setdefault("capital_model", capital_model)
+    params.setdefault("initial_capital", initial_capital)
 
     ctx = StrategyContext(event_bus, params, strategy_name=strategy_name)
     ctx.link_portfolio(portfolio)
@@ -261,6 +297,8 @@ async def _run_strategy_adapter_backtest(
         await event_bus.publish(FillEvent(fill=fill))
 
     async def _on_fill(event: FillEvent) -> None:
+        nonlocal capital_available, refill_events, refill_amount
+
         fill = event.fill
         meta = order_meta.get(fill.order_id, {})
         basket_id = str(meta.get("basket_id", "none"))
@@ -291,7 +329,9 @@ async def _run_strategy_adapter_backtest(
         if not entry:
             return
         qty = int(entry["quantity"])
+        capital_before = float(capital_available)
         pnl = (fill.price - float(entry["entry_price"])) * qty
+        capital_available = float(capital_available + pnl)
         exit_tag = str(meta.get("tag") or "EXIT").upper()
         trades.append(
             {
@@ -303,8 +343,39 @@ async def _run_strategy_adapter_backtest(
                 "exit_price": float(fill.price),
                 "exit_reason": exit_tag,
                 "pnl": pnl,
+                "capital_before": capital_before,
+                "capital_after": float(capital_available),
             }
         )
+
+        refill_topup = 0.0
+        if capital_available <= 0:
+            refill_topup = float(initial_capital - capital_available)
+        elif capital_model == "non_compounding" and capital_available < initial_capital:
+            refill_topup = float(initial_capital - capital_available)
+
+        if refill_topup > 0:
+            refill_events += 1
+            refill_amount += refill_topup
+            refill_before = float(capital_available)
+            capital_available = float(capital_available + refill_topup)
+            await journal.log_event(
+                "INITIAL_CAPITAL_REFILL",
+                fill.symbol,
+                {
+                    "reason": "capital_refill",
+                    "refill_amount": round(refill_topup, 2),
+                    "triggered_by_order_id": fill.order_id,
+                },
+                basket_id=basket_id,
+                event_ts=isoformat_ist(fill.filled_at),
+                capital_context={
+                    "initial_capital": float(initial_capital),
+                    "capital_before_event": refill_before,
+                    "capital_after_event": float(capital_available),
+                    "capital_available": float(capital_available),
+                },
+            )
 
     event_bus.subscribe(EventType.SIGNAL, _on_signal)
     event_bus.subscribe(EventType.ORDER, _on_order)
@@ -348,6 +419,13 @@ async def _run_strategy_adapter_backtest(
             )
 
             if hasattr(strategy, "evaluate_snapshot"):
+                if capital_model == "compounding":
+                    one_lot_cost = float(bar.close) * lot_size
+                    if one_lot_cost > 0:
+                        dynamic_lots = max(1, math.floor(capital_available / one_lot_cost))
+                    else:
+                        dynamic_lots = lot_quantity
+                    ctx.params["lot_quantity"] = dynamic_lots
                 await strategy.evaluate_snapshot(snapshot)
             else:
                 await strategy.on_bar(bar)
@@ -372,7 +450,15 @@ async def _run_strategy_adapter_backtest(
     finally:
         await DatabaseManager.close_pool()
 
-    summary = _summarize_trades(trades, bars_5m)
+    summary = _summarize_trades(
+        trades,
+        bars_5m,
+        capital_model=capital_model,
+        initial_capital=initial_capital,
+        ending_capital=capital_available,
+        refill_events=refill_events,
+        refill_amount=refill_amount,
+    )
 
     started_at = now_ist().isoformat()
     summary_lines = [
@@ -397,6 +483,10 @@ async def _run_strategy_adapter_backtest(
         f"max_consecutive_loss_trades={summary['max_consecutive_loss_trades']}",
         f"capital_model={summary['capital_model']}",
         f"pnl_model={summary['pnl_model']}",
+        f"initial_capital={summary['initial_capital']}",
+        f"ending_capital={summary['ending_capital']}",
+        f"refill_events={summary['refill_events']}",
+        f"refill_amount={summary['refill_amount']}",
     ]
     summary_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
 
@@ -405,6 +495,7 @@ async def _run_strategy_adapter_backtest(
         f"[{now_ist().isoformat()}] trading_days={summary['trading_days']} trades={summary['total_trades']} total_pnl={summary['total_pnl']}",
         f"[{now_ist().isoformat()}] max_profit={summary['max_profit']} max_loss={summary['max_loss']} min_profit={summary['min_profit']} min_loss={summary['min_loss']}",
         f"[{now_ist().isoformat()}] max_consecutive_loss_trades={summary['max_consecutive_loss_trades']} capital_model={summary['capital_model']} pnl_model={summary['pnl_model']}",
+        f"[{now_ist().isoformat()}] initial_capital={summary['initial_capital']} ending_capital={summary['ending_capital']} refill_events={summary['refill_events']} refill_amount={summary['refill_amount']}",
         f"[{now_ist().isoformat()}] journal={journal_path.as_posix()}",
         f"[{now_ist().isoformat()}] summary={summary_path.as_posix()}",
     ]
@@ -416,14 +507,18 @@ async def _run_strategy_adapter_backtest(
     print(f"  Total trades               : {summary['total_trades']}")
     print(f"  Wins / Losses              : {summary['wins']} / {summary['losses']}")
     print(f"  Win rate                   : {summary['win_rate_pct']}%")
-    print(f"  Total PnL                  : ₹{summary['total_pnl']:,.2f}")
-    print(f"  Max profit                 : ₹{summary['max_profit']:,.2f}")
-    print(f"  Max loss                   : ₹{summary['max_loss']:,.2f}")
-    print(f"  Min profit                 : ₹{summary['min_profit']:,.2f}")
-    print(f"  Min loss                   : ₹{summary['min_loss']:,.2f}")
+    print(f"  Total PnL                  : Rs {summary['total_pnl']:,.2f}")
+    print(f"  Max profit                 : Rs {summary['max_profit']:,.2f}")
+    print(f"  Max loss                   : Rs {summary['max_loss']:,.2f}")
+    print(f"  Min profit                 : Rs {summary['min_profit']:,.2f}")
+    print(f"  Min loss                   : Rs {summary['min_loss']:,.2f}")
     print(f"  Max consecutive loss trades: {summary['max_consecutive_loss_trades']}")
     print(f"  Capital model              : {summary['capital_model']}")
     print(f"  PnL model                  : {summary['pnl_model']}")
+    print(f"  Initial capital            : Rs {summary['initial_capital']:,.2f}")
+    print(f"  Ending capital             : Rs {summary['ending_capital']:,.2f}")
+    print(f"  Refill events              : {summary['refill_events']}")
+    print(f"  Refill amount              : Rs {summary['refill_amount']:,.2f}")
 
     return AdapterBacktestResult(
         trades=trades,

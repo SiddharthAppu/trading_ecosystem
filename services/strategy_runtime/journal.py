@@ -2,7 +2,7 @@ import json
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from services.strategy_runtime.time_utils import now_ist, parse_iso_to_ist
 
@@ -13,10 +13,17 @@ class JournalManager:
     Asynchronously logs trading events to a JSONL (JSON Lines) file.
     This is the primary source of truth for Astra in Zero-DB mode.
     """
-    def __init__(self, journal_path: str, strategy_name: str = "AstraDefault", timeframe: str = "1m"):
+    def __init__(
+        self,
+        journal_path: str,
+        strategy_name: str = "AstraDefault",
+        timeframe: str = "1m",
+        capital_context_provider: Callable[[], Dict[str, Any]] | None = None,
+    ):
         self.path = Path(journal_path)
         self.strategy_name = strategy_name
         self.timeframe = timeframe
+        self._capital_context_provider = capital_context_provider
         self._lock = asyncio.Lock()
         self._initialized = False
 
@@ -30,6 +37,7 @@ class JournalManager:
         payload: Dict[str, Any],
         basket_id: str = "none",
         event_ts: str | None = None,
+        capital_context: Dict[str, Any] | None = None,
     ):
         """Append an event to the journal file with full context."""
         if not self._initialized:
@@ -38,6 +46,13 @@ class JournalManager:
 
         write_ts = now_ist().isoformat()
         resolved_event_ts = parse_iso_to_ist(event_ts) if event_ts else write_ts
+        resolved_capital_context = capital_context
+        if resolved_capital_context is None and self._capital_context_provider is not None:
+            try:
+                resolved_capital_context = self._capital_context_provider()
+            except (TypeError, ValueError, AttributeError, RuntimeError):
+                resolved_capital_context = None
+
         entry = {
             "ts": resolved_event_ts,
             "event_ts": resolved_event_ts,
@@ -49,6 +64,8 @@ class JournalManager:
             "basket_id": basket_id,
             "data": payload
         }
+        if resolved_capital_context is not None:
+            entry["capital"] = resolved_capital_context
 
         async with self._lock:
             try:
@@ -68,6 +85,7 @@ class JournalManager:
         indicators: list[str],
         run_params: dict[str, Any],
         basket_id: str = "none",
+        capital_context: Dict[str, Any] | None = None,
     ) -> None:
         """Write a RUNTIME_HEADER event as the first entry of a new run journal.
         Contains strategy configuration and parameters for backtracking."""
@@ -81,15 +99,25 @@ class JournalManager:
                 **run_params,
             },
             basket_id=basket_id,
+            capital_context=capital_context,
         )
 
-    async def log_indicator_signal(self, symbol: str, indicator: str, value: Any, threshold: Any, action: str, basket_id: str = "none"):
+    async def log_indicator_signal(
+        self,
+        symbol: str,
+        indicator: str,
+        value: Any,
+        threshold: Any,
+        action: str,
+        basket_id: str = "none",
+        capital_context: Dict[str, Any] | None = None,
+    ):
         await self.log_event("INDICATOR_PASSED", symbol, {
             "indicator": indicator,
             "value": value,
             "threshold": threshold,
             "action": action
-        }, basket_id=basket_id)
+        }, basket_id=basket_id, capital_context=capital_context)
 
     async def log_order(
         self,
@@ -97,16 +125,31 @@ class JournalManager:
         order_data: Dict[str, Any],
         basket_id: str = "none",
         event_ts: str | None = None,
+        capital_context: Dict[str, Any] | None = None,
     ):
-        await self.log_event("ORDER_PLACED", symbol, order_data, basket_id=basket_id, event_ts=event_ts)
+        await self.log_event(
+            "ORDER_PLACED",
+            symbol,
+            order_data,
+            basket_id=basket_id,
+            event_ts=event_ts,
+            capital_context=capital_context,
+        )
 
-    async def log_fill(self, symbol: str, fill_data: Dict[str, Any], basket_id: str = "none"):
+    async def log_fill(
+        self,
+        symbol: str,
+        fill_data: Dict[str, Any],
+        basket_id: str = "none",
+        capital_context: Dict[str, Any] | None = None,
+    ):
         await self.log_event(
             "ORDER_FILL",
             symbol,
             fill_data,
             basket_id=basket_id,
             event_ts=str(fill_data.get("filled_at", "")) or None,
+            capital_context=capital_context,
         )
 
     def recover_state(self) -> list[Dict[str, Any]]:

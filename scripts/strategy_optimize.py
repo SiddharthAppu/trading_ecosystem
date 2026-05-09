@@ -74,6 +74,13 @@ def main() -> None:
     parser.add_argument("--from", dest="from_date", required=True, help="YYYY-MM-DD")
     parser.add_argument("--to",   dest="to_date",   required=True, help="YYYY-MM-DD")
     parser.add_argument("--lot-size",     type=int, default=75)
+    parser.add_argument("--lot-quantity", type=int, default=1)
+    parser.add_argument("--initial-capital", type=float, default=100000.0)
+    parser.add_argument(
+        "--capital-model",
+        choices=["non_compounding", "compounding"],
+        default="non_compounding",
+    )
     parser.add_argument("--index-symbol", default="NSE:NIFTY50-INDEX")
     parser.add_argument(
         "--strategy-name",
@@ -149,6 +156,9 @@ def main() -> None:
                     premium_tolerance=params["premium_tolerance"],
                     sl_pct=params["sl_pct"],
                     lot_size=args.lot_size,
+                    lot_quantity=args.lot_quantity,
+                    initial_capital=args.initial_capital,
+                    capital_model=args.capital_model,
                     index_symbol=args.index_symbol,
                     engine="adapter",
                     strategy_name=args.strategy_name,

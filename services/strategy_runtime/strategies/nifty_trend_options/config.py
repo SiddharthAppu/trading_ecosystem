@@ -5,8 +5,10 @@ import os
 
 def get_default_params() -> dict:
     return {
-        # Quantity per trade (1 lot)
-        "quantity": 1,
+        # Lot-based position sizing
+        "lot_quantity": 1,
+        "lot_size": 1,
+        "capital_model": "non_compounding",
         # Upstox underlying symbol for NIFTY50 index
         "underlying_symbol": os.getenv("NIFTY_UNDERLYING_SYMBOL", "NSE_INDEX|Nifty 50"),
         # Option expiry to trade (ISO date "YYYY-MM-DD"). Set "" to auto-pick nearest weekly.

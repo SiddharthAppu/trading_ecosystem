@@ -67,12 +67,26 @@ class RuntimeRiskManager:
         self.settings = settings
         self._trailing_peaks: dict[str, float] = {}
 
-    def validate_entry(self, *, quantity: int, price: float, current_quantity: int) -> RiskDecision:
-        if quantity <= 0:
+    def validate_entry(
+        self,
+        *,
+        quantity_units: int,
+        lot_size: int,
+        price: float,
+        current_quantity_units: int,
+    ) -> RiskDecision:
+        if quantity_units <= 0:
             return RiskDecision(False, "quantity must be positive")
-        if current_quantity + quantity > self.settings.max_position_quantity:
-            return RiskDecision(False, "max_position_quantity breached")
-        if quantity * price > self.settings.max_notional_per_trade:
+        if lot_size <= 0:
+            return RiskDecision(False, "lot_size must be positive")
+        if quantity_units % lot_size != 0:
+            return RiskDecision(False, "quantity must be a whole multiple of lot_size")
+
+        current_lots = current_quantity_units // lot_size
+        new_lots = quantity_units // lot_size
+        if current_lots + new_lots > self.settings.max_position_lots:
+            return RiskDecision(False, "max_position_lots breached")
+        if quantity_units * price > self.settings.max_notional_per_trade:
             return RiskDecision(False, "max_notional_per_trade breached")
         return RiskDecision(True)
 
@@ -526,8 +540,19 @@ class StrategyRuntime:
         self.journal = JournalManager(
             settings.log_file.replace(".log", "_journal.jsonl"),
             strategy_name=settings.strategy_name,
-            timeframe=settings.timeframe
+            timeframe=settings.timeframe,
+            capital_context_provider=self._journal_capital_context,
         )
+
+    def _journal_capital_context(self) -> dict[str, Any]:
+        total_pnl = self.portfolio.get_total_pnl(self._latest_price_by_symbol)
+        capital_available = float(self.settings.initial_capital) + float(total_pnl)
+        return {
+            "initial_capital": float(self.settings.initial_capital),
+            "capital_before_event": capital_available,
+            "capital_after_event": capital_available,
+            "capital_available": capital_available,
+        }
 
     def _build_feed(self, settings: RuntimeSettings):
         if settings.feed_source == "replay_ws":
@@ -538,7 +563,10 @@ class StrategyRuntime:
         strategy_params = load_strategy_params(self.settings.strategy_name)
         strategy_params.update(
             {
-                "quantity": self.settings.quantity,
+                "lot_quantity": self.settings.lot_quantity,
+                "lot_size": self.settings.lot_size,
+                "capital_model": self.settings.capital_model,
+                "initial_capital": self.settings.initial_capital,
                 "provider": self.settings.provider,
                 "timeframe": self.settings.timeframe,
             }
@@ -725,9 +753,10 @@ class StrategyRuntime:
 
         if order.side == Side.BUY and reference_price > 0:
             decision = self.risk_manager.validate_entry(
-                quantity=order.quantity,
+                quantity_units=order.quantity,
+                lot_size=self.settings.lot_size,
                 price=reference_price,
-                current_quantity=current_quantity,
+                current_quantity_units=current_quantity,
             )
             if not decision.accepted:
                 from trading_core.models import OrderStatus
@@ -1013,9 +1042,11 @@ class StrategyRuntime:
             "trading_provider": self.trading_provider,
             "symbol": s.symbol,
             "indicator_input_mode": s.indicator_input_mode,
-            "quantity": s.quantity,
+            "lot_quantity": s.lot_quantity,
+            "lot_size": s.lot_size,
             "initial_capital": s.initial_capital,
-            "max_position_quantity": s.max_position_quantity,
+            "max_position_lots": s.max_position_lots,
+            "capital_model": s.capital_model,
             "max_notional_per_trade": s.max_notional_per_trade,
             "stop_loss_pct": s.stop_loss_pct,
             "trailing_stop_pct": s.trailing_stop_pct,
