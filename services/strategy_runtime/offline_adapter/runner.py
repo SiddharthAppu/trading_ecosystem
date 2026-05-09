@@ -64,6 +64,53 @@ def _append_lines(path: Path, lines: list[str]) -> None:
         handle.write("\n".join(lines) + "\n")
 
 
+def _summarize_trades(trades: list[dict[str, Any]], bars_5m: list[dict[str, Any]]) -> dict[str, Any]:
+    pnls = [float(trade.get("pnl", 0.0)) for trade in trades]
+    wins = [pnl for pnl in pnls if pnl > 0]
+    losses = [pnl for pnl in pnls if pnl <= 0]
+    positive_pnls = [pnl for pnl in pnls if pnl > 0]
+    negative_pnls = [pnl for pnl in pnls if pnl < 0]
+
+    max_profit = max(pnls) if pnls else 0.0
+    max_loss = min(negative_pnls) if negative_pnls else 0.0
+    min_profit = min(positive_pnls) if positive_pnls else 0.0
+    min_loss = max(negative_pnls) if negative_pnls else 0.0
+
+    max_loss_streak = 0
+    current_loss_streak = 0
+    for pnl in pnls:
+        if pnl <= 0:
+            current_loss_streak += 1
+            max_loss_streak = max(max_loss_streak, current_loss_streak)
+        else:
+            current_loss_streak = 0
+
+    trading_days = len({bar["time"].date() for bar in bars_5m if bar.get("time")})
+    total = len(trades)
+    total_pnl = sum(pnls)
+    win_rate = (len(wins) / total * 100.0) if total else 0.0
+    avg_win = (sum(wins) / len(wins)) if wins else 0.0
+    avg_loss = (sum(losses) / len(losses)) if losses else 0.0
+
+    return {
+        "total_trades": total,
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate_pct": round(win_rate, 1),
+        "total_pnl": round(total_pnl, 2),
+        "avg_win": round(avg_win, 2),
+        "avg_loss": round(avg_loss, 2),
+        "trading_days": trading_days,
+        "max_profit": round(max_profit, 2),
+        "max_loss": round(max_loss, 2),
+        "min_profit": round(min_profit, 2),
+        "min_loss": round(min_loss, 2),
+        "max_consecutive_loss_trades": max_loss_streak,
+        "capital_model": "fixed_quantity_non_compounding",
+        "pnl_model": "additive_per_trade",
+    }
+
+
 def run_strategy_adapter_backtest(
     *,
     bars_5m: list[dict[str, Any]],
@@ -325,23 +372,7 @@ async def _run_strategy_adapter_backtest(
     finally:
         await DatabaseManager.close_pool()
 
-    total = len(trades)
-    wins = [trade for trade in trades if float(trade.get("pnl", 0.0)) > 0]
-    losses = [trade for trade in trades if float(trade.get("pnl", 0.0)) <= 0]
-    total_pnl = sum(float(trade.get("pnl", 0.0)) for trade in trades)
-    win_rate = (len(wins) / total * 100.0) if total else 0.0
-    avg_win = (sum(float(trade.get("pnl", 0.0)) for trade in wins) / len(wins)) if wins else 0.0
-    avg_loss = (sum(float(trade.get("pnl", 0.0)) for trade in losses) / len(losses)) if losses else 0.0
-
-    summary = {
-        "total_trades": total,
-        "wins": len(wins),
-        "losses": len(losses),
-        "win_rate_pct": round(win_rate, 1),
-        "total_pnl": round(total_pnl, 2),
-        "avg_win": round(avg_win, 2),
-        "avg_loss": round(avg_loss, 2),
-    }
+    summary = _summarize_trades(trades, bars_5m)
 
     started_at = now_ist().isoformat()
     summary_lines = [
@@ -356,18 +387,43 @@ async def _run_strategy_adapter_backtest(
         "outcome=completed",
         f"journal_path={journal_path.as_posix()}",
         f"log_path={log_path.as_posix()}",
+        f"trading_days={summary['trading_days']}",
         f"total_trades={summary['total_trades']}",
         f"total_pnl={summary['total_pnl']}",
+        f"max_profit={summary['max_profit']}",
+        f"max_loss={summary['max_loss']}",
+        f"min_profit={summary['min_profit']}",
+        f"min_loss={summary['min_loss']}",
+        f"max_consecutive_loss_trades={summary['max_consecutive_loss_trades']}",
+        f"capital_model={summary['capital_model']}",
+        f"pnl_model={summary['pnl_model']}",
     ]
     summary_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
 
     log_lines = [
         f"[{started_at}] mode=backtest strategy={strategy_name} range={from_date}->{to_date}",
-        f"[{now_ist().isoformat()}] trades={summary['total_trades']} total_pnl={summary['total_pnl']}",
+        f"[{now_ist().isoformat()}] trading_days={summary['trading_days']} trades={summary['total_trades']} total_pnl={summary['total_pnl']}",
+        f"[{now_ist().isoformat()}] max_profit={summary['max_profit']} max_loss={summary['max_loss']} min_profit={summary['min_profit']} min_loss={summary['min_loss']}",
+        f"[{now_ist().isoformat()}] max_consecutive_loss_trades={summary['max_consecutive_loss_trades']} capital_model={summary['capital_model']} pnl_model={summary['pnl_model']}",
         f"[{now_ist().isoformat()}] journal={journal_path.as_posix()}",
         f"[{now_ist().isoformat()}] summary={summary_path.as_posix()}",
     ]
     _append_lines(log_path, log_lines)
+
+    print()
+    print("  Backtest summary")
+    print(f"  Trading days               : {summary['trading_days']}")
+    print(f"  Total trades               : {summary['total_trades']}")
+    print(f"  Wins / Losses              : {summary['wins']} / {summary['losses']}")
+    print(f"  Win rate                   : {summary['win_rate_pct']}%")
+    print(f"  Total PnL                  : ₹{summary['total_pnl']:,.2f}")
+    print(f"  Max profit                 : ₹{summary['max_profit']:,.2f}")
+    print(f"  Max loss                   : ₹{summary['max_loss']:,.2f}")
+    print(f"  Min profit                 : ₹{summary['min_profit']:,.2f}")
+    print(f"  Min loss                   : ₹{summary['min_loss']:,.2f}")
+    print(f"  Max consecutive loss trades: {summary['max_consecutive_loss_trades']}")
+    print(f"  Capital model              : {summary['capital_model']}")
+    print(f"  PnL model                  : {summary['pnl_model']}")
 
     return AdapterBacktestResult(
         trades=trades,

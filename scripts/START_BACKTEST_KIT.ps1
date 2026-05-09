@@ -204,6 +204,29 @@ $effectiveIndexSymbol = if ($Symbol -ne "") {
 } else {
     "NSE:NIFTY50-INDEX"
 }
+$strategyNameSource = if ($PSBoundParameters.ContainsKey("StrategyName") -and -not [string]::IsNullOrWhiteSpace($StrategyName)) {
+    "CLI"
+} elseif (-not [string]::IsNullOrWhiteSpace($env:STRATEGY_RUNTIME_STRATEGY)) {
+    "config"
+} else {
+    "default"
+}
+
+$timeframeSource = if ($PSBoundParameters.ContainsKey("Timeframe") -and -not [string]::IsNullOrWhiteSpace($Timeframe)) {
+    "CLI"
+} elseif (-not [string]::IsNullOrWhiteSpace($env:STRATEGY_RUNTIME_TIMEFRAME)) {
+    "config"
+} else {
+    "default"
+}
+
+$logFileSource = if ($PSBoundParameters.ContainsKey("LogFile") -and -not [string]::IsNullOrWhiteSpace($LogFile)) {
+    "CLI"
+} elseif (-not [string]::IsNullOrWhiteSpace($env:STRATEGY_RUNTIME_LOG_FILE)) {
+    "config"
+} else {
+    "default"
+}
 
 # ── Runtime dependency preflight ─────────────────────────────────────────────
 & $PYTHON_EXE -c "import psycopg2" 2>$null
@@ -217,6 +240,93 @@ if ($LASTEXITCODE -ne 0) {
 
 # ── Set PYTHONPATH ─────────────────────────────────────────────────────────────
 $env:PYTHONPATH = "$KIT_ROOT\packages\trading_core"
+
+Write-Host ""
+Write-Host "[PREFLIGHT] Locked configuration summary" -ForegroundColor Cyan
+Write-Host "  Strategy   : $effectiveStrategyName ($strategyNameSource)" -ForegroundColor White
+Write-Host "  Timeframe  : $effectiveTimeframe ($timeframeSource)" -ForegroundColor White
+Write-Host "  Log file   : $effectiveLogFile ($logFileSource)" -ForegroundColor White
+Write-Host "  Index sym  : $effectiveIndexSymbol" -ForegroundColor White
+Write-Host "  Mode       : $Mode" -ForegroundColor White
+
+Write-Host ""
+Write-Host "[PREFLIGHT] Table snapshot" -ForegroundColor Cyan
+Write-Host "  Table      : master_broker.ohlcv_1m" -ForegroundColor White
+Write-Host "  Table      : master_broker.options_ohlc_1m_fromupstox" -ForegroundColor White
+
+$tableSnapshotScript = @'
+import json
+import os
+import sys
+
+import psycopg2
+
+database_url = os.getenv("DATABASE_URL", "")
+if not database_url:
+    print(json.dumps({"ok": False, "error": "DATABASE_URL not set"}))
+    raise SystemExit(0)
+
+try:
+    conn = psycopg2.connect(database_url)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT count(*), min(time), max(time)
+        FROM master_broker.ohlcv_1m
+        WHERE symbol = %s
+        """,
+        (sys.argv[1],),
+    )
+    index_count, index_min_time, index_max_time = cur.fetchone()
+
+    cur.execute(
+        """
+        SELECT count(*), min(time), max(time)
+        FROM master_broker.options_ohlc_1m_fromupstox
+        """
+    )
+    options_count, options_min_time, options_max_time = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "index_count": int(index_count or 0),
+                "index_min_time": index_min_time.isoformat() if index_min_time else None,
+                "index_max_time": index_max_time.isoformat() if index_max_time else None,
+                "options_count": int(options_count or 0),
+                "options_min_time": options_min_time.isoformat() if options_min_time else None,
+                "options_max_time": options_max_time.isoformat() if options_max_time else None,
+            }
+        )
+    )
+except Exception as exc:
+    print(json.dumps({"ok": False, "error": str(exc)}))
+'@
+
+$snapshotRaw = $tableSnapshotScript | & $PYTHON_EXE - $effectiveIndexSymbol 2>$null
+$snapshot = $null
+if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($snapshotRaw | Out-String))) {
+    try {
+        $snapshot = ($snapshotRaw | Out-String).Trim() | ConvertFrom-Json
+    } catch {
+        $snapshot = $null
+    }
+}
+
+if ($null -ne $snapshot -and $snapshot.ok) {
+    Write-Host "  Index rows : $($snapshot.index_count)" -ForegroundColor White
+    Write-Host "  Index span : $($snapshot.index_min_time) -> $($snapshot.index_max_time)" -ForegroundColor White
+    Write-Host "  Options rows: $($snapshot.options_count)" -ForegroundColor White
+    Write-Host "  Options span: $($snapshot.options_min_time) -> $($snapshot.options_max_time)" -ForegroundColor White
+} elseif ($null -ne $snapshot -and -not $snapshot.ok) {
+    Write-Host "  [WARN] Table snapshot failed: $($snapshot.error)" -ForegroundColor Yellow
+} else {
+    Write-Host "  [WARN] Table snapshot returned no parseable output." -ForegroundColor Yellow
+}
 
 # ── Prompt for dates if not provided ──────────────────────────────────────────
 if ($From -eq "") {
