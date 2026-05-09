@@ -15,12 +15,16 @@ Scope: Build and deploy Astra standalone kits; run paper trading with a live bro
 6. [Replay Kit: Paper Trading With Historical Data](#6-replay-kit-paper-trading-with-historical-data)
 7. [Backtest Kit: Offline Strategy Analysis](#7-backtest-kit-offline-strategy-analysis)
 8. [Live-Paper Kit: Paper Trading With Live Broker Feed](#8-live-paper-kit-paper-trading-with-live-broker-feed)
-9. [Configuration Reference](#9-configuration-reference)
-10. [Telegram Alerts Setup](#10-telegram-alerts-setup)
-11. [Journal Event Linking](#11-journal-event-linking)
-12. [Logging And Expected Artifacts](#12-logging-and-expected-artifacts)
-13. [Smoke Tests And Validation](#13-smoke-tests-and-validation)
-14. [Risks And Mitigations](#14-risks-and-mitigations)
+9. [Strategy Reference: ema_cross](#9-strategy-reference-ema_cross)
+10. [Risk Management & Stop Loss](#10-risk-management--stop-loss)
+11. [Live Tick Capture (Zero-DB Mode)](#11-live-tick-capture-zero-db-mode)
+12. [Configuration Reference](#12-configuration-reference)
+13. [Telegram Alerts Setup](#13-telegram-alerts-setup)
+14. [Journal Event Linking](#14-journal-event-linking)
+15. [Logging And Expected Artifacts](#15-logging-and-expected-artifacts)
+16. [Smoke Tests And Validation](#16-smoke-tests-and-validation)
+17. [Risks And Mitigations](#17-risks-and-mitigations)
+18. [FAQ](#18-faq)
 
 ---
 
@@ -178,6 +182,7 @@ dist\
 **Backtest kit includes:**
 - `scripts/strategy_backtest.py`
 - `scripts/strategy_optimize.py`
+- `services/strategy_runtime/` — offline adapter runner and strategy implementations used by the backtest/optimizer
 - `packages/trading_core/`
 - `START_BACKTEST_KIT.ps1` — one-click launcher at **kit root** (not scripts/)
 - `config/.env` (if present in workspace)
@@ -220,7 +225,7 @@ pip install -e .\packages\trading_core
 **Backtest kit:**
 
 ```powershell
-pip install asyncpg pandas python-dotenv ta-lib
+pip install -r .\services\strategy_runtime\astra-kit-requirements.txt psycopg2-binary
 pip install -e .\packages\trading_core
 ```
 
@@ -290,7 +295,7 @@ This automatically:
 8. Starts the **strategy runtime** (HTTP API on `http://localhost:8090`)
 9. Polls `/status` every 5 seconds and prints a live progress line to the console
 10. Writes a final end-of-run summary when the runtime exits
-11. On Ctrl+C, cleanly shuts down both processes
+11. On Ctrl+C, cleanly shuts down both processes (runtime + replay engine), preventing orphaned background processes
 
 ### Confirmation modes
 
@@ -444,7 +449,15 @@ curl http://localhost:8090/status
 
 ### How replay option data works
 
-In replay mode, option chain and quote lookups are served from `master_broker.options_ohlc_1m_fromupstox` at the simulated timestamp — no live broker is called. The resolver is automatically injected by the runtime when `FEED_SOURCE=replay_ws`.
+In replay mode, option chain and quote lookups are resolved from a historical DB table at the simulated timestamp, and no live broker quote API is called. By default, the resolver uses `master_broker.options_ohlc_1m_fromupstox`.
+
+You can override the option quote source table with:
+
+```dotenv
+STRATEGY_RUNTIME_REPLAY_OPTIONS_TABLE=master_broker.options_ohlc_1m_fromupstox
+```
+
+This table override is independent of `STRATEGY_RUNTIME_REPLAY_DATA_TYPE` (which controls the underlying replay stream such as `ohlcv_1m` or `market_ticks`). The resolver is automatically injected by the runtime when `FEED_SOURCE=replay_ws`.
 
 ### Phase 1: Tick-based replay with 1m bar aggregation
 
@@ -530,7 +543,30 @@ Show top 15 parameter combinations instead of default 10:
 .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -EnvFile "D:\Configs\trading_db.env"
 ```
 
+### Reuse strategy config file from config directory
+
+By default, `START_BACKTEST_KIT.ps1` also reads strategy metadata from:
+
+```text
+config\strategy_runtime.paper_replay.env
+```
+
+It picks these keys when present:
+- `STRATEGY_RUNTIME_STRATEGY` -> backtest `--strategy-name`
+- `STRATEGY_RUNTIME_TIMEFRAME` -> backtest `--timeframe`
+- `STRATEGY_RUNTIME_LOG_FILE` -> backtest `--log-file`
+
+Use a different strategy config file with:
+
+```powershell
+.\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -StrategyConfig "config\strategy_runtime.ema_cross.paper_replay.env"
+```
+
+CLI parameters always override values loaded from the strategy config file.
+
 ### Run scripts directly (bypass runner)
+
+`START_BACKTEST_KIT.ps1` is an operator-friendly wrapper around direct script calls. It adds env loading, interactive date prompts, date format validation, smoke-mode normalization, and consistent argument assembly/summary output. The backtest kit now runs through the strategy-runtime offline adapter path only. Direct script invocation is still useful for automation and advanced custom runs.
 
 Single backtest:
 
@@ -579,12 +615,16 @@ The optimiser ranks parameter sets by net PnL. Useful parameters to tune:
 
 ## 8. Live-Paper Kit: Paper Trading With Live Broker Feed Or External Replay
 
-The `astra-kit` supports two operating modes:
+The `astra-kit` supports three operating modes, plus replay-paper connectivity:
 
 | Mode | Feed source | Replay engine needed? |
 |---|---|---|
 | Live-paper | Live broker (Upstox/Fyers) | No |
+| Unified Capture + Strategy (Astra Studio) | Live broker + recorder orchestration | No |
+| Live-live (advanced) | Live broker feed + live broker execution | No |
 | Replay-paper | Historical DB via WebSocket | Yes — started externally |
+
+`Replay-paper` in `astra-kit` is functionally the same runtime mode as the replay kit (historical bars over WebSocket). The difference is packaging: replay kit bundles and launches `services/replay_engine`, while `astra-kit` expects replay engine to be started externally.
 
 ### Mode 1: Live-paper (market hours)
 
@@ -609,18 +649,35 @@ Or with explicit strategy:
 powershell -ExecutionPolicy Bypass -File .\scripts\start_strategy_runtime_live_paper.ps1 -Strategy nifty_trend_options
 ```
 
-### Mode 3: Unified Capture + Strategy (Astra Studio Mode)
+### Mode 2: Unified Capture + Strategy (Astra Studio Mode)
 
-This is the recommended mode for active paper trading sessions. It launches the Data Collector, starts the Master Recorder (to capture ticks to CSV), and starts your Strategy Runtime in one window.
+This is the recommended mode for active paper trading sessions. It launches the Data Collector, starts the Master Recorder (to capture ticks), and starts your Strategy Runtime in one window.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start_live_capture_and_strategy.ps1 -Strategy ema_cross
 ```
 
 **What this does:**
-1.  **Ensures DB & Collector:** Boots the TimescaleDB container and Data Collector API.
-2.  **Starts Master Recorder:** Begins capturing ticks for the next 4 weekly expiries into `logs/ticks/`.
+1.  **Ensures Collector:** Starts Data Collector if not already running.
+2.  **Starts Master Recorder:** Begins capturing ticks for the next 4 weekly expiries into `logs/ticks/` (CSV-first workflow).
 3.  **Starts Strategy:** Launches the strategy engine in Paper Trading mode connected to the live broker feed.
+
+Recorder persistence is configurable (`--enable-db true|false|default`). For low-latency sessions, recommended practice is CSV-first capture during market hours, then EOD import into DB.
+
+### Mode 3: Live-live (advanced)
+
+This mode places real broker orders while still using live market data. Use only after paper-mode validation and risk checks.
+
+To enable live execution, set `STRATEGY_RUNTIME_TRADING_PROVIDER` to a live adapter (for example `zerodha`) in your live env file, then launch normally:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_strategy_runtime_live_paper.ps1 -Strategy ema_cross
+```
+
+Notes:
+- Data provider (`STRATEGY_RUNTIME_PROVIDER`) and trading provider (`STRATEGY_RUNTIME_TRADING_PROVIDER`) are separate settings.
+- A single runtime process uses one market-data provider at a time. If you need dual-provider capture, run recorder workers for both providers.
+- Keep tick capture running to preserve auditability and support EOD DB import workflows.
 
 ---
 
@@ -698,7 +755,7 @@ python .\scripts\lib\import_ticks_to_db.py --date 2026-05-06 --dir .\logs\ticks
 | `STRATEGY_RUNTIME_REPLAY_END_TIME` | ISO8601 replay end | `2026-04-15T15:30:00+05:30` |
 | `STRATEGY_RUNTIME_REPLAY_DATA_TYPE` | Data type streamed by replay engine | `ohlcv_1m` or `market_ticks` |
 | `STRATEGY_RUNTIME_INDICATOR_INPUT_MODE` | How indicators receive data | `bars_1m` or `ticks` |
-| `TELEGRAM_ENABLED` | Enable Telegram alerts | `false` |}
+| `TELEGRAM_ENABLED` | Enable Telegram alerts | `false` |
 | `NIFTY_PREMIUM_TARGET` | Target option premium (Rs) | `200.0` |
 | `NIFTY_PREMIUM_TOLERANCE` | Premium tolerance window (Rs) | `30.0` |
 | `NIFTY_REWARD_RISK_RATIO` | Exit target as multiple of stop | `2.0` |
@@ -719,11 +776,11 @@ python .\scripts\lib\import_ticks_to_db.py --date 2026-05-06 --dir .\logs\ticks
 | `DB_PASSWORD` | Database password |
 | `DATABASE_URL` | Full connection URL (overrides individual keys) |
 | `TELEGRAM_BOT_TOKEN` | Bot token from BotFather |
-| `TELEGRAM_CHAT_ID` | Your chat ID (see Section 10) |
+| `TELEGRAM_CHAT_ID` | Your chat ID (see Section 13) |
 
 ---
 
-## 10. Telegram Alerts Setup
+## 13. Telegram Alerts Setup
 
 ### Create a bot
 
@@ -758,7 +815,7 @@ Alerts are sent on: ORDER_PLACED, ORDER_FILL, strategy errors. When `TELEGRAM_EN
 
 ---
 
-## 11. Journal Event Linking
+## 14. Journal Event Linking
 
 Every order and signal decision is written to a JSONL journal at `logs\strategy_runtime\*_journal.jsonl`. Astra provides tools to bridge these logs into visual charting environments.
 
@@ -806,7 +863,7 @@ To see your Astra trades overlaid on your TradingView charts:
 
 ---
 
-## 12. Logging And Expected Artifacts
+## 15. Logging And Expected Artifacts
 
 | File | Description |
 |---|---|
@@ -828,7 +885,7 @@ Minimum acceptance checks after a session:
 
 ---
 
-## 13. Smoke Tests And Validation
+## 16. Smoke Tests And Validation
 
 Run these after deploying any kit to confirm the install is healthy.
 
@@ -889,7 +946,7 @@ curl http://localhost:8090/status
 
 ---
 
-## 14. Risks And Mitigations
+## 17. Risks And Mitigations
 
 | Risk | Mitigation |
 |---|---|
@@ -902,5 +959,37 @@ curl http://localhost:8090/status
 
 ---
 
+## 18. FAQ
+
+### Why is Ctrl+C cleanup needed in replay kit? Can't processes stop on their own?
+
+The runtime can exit when replay completes, but the replay engine process can continue running unless explicitly stopped. `START_REPLAY_KIT.ps1` handles Ctrl+C by stopping both child processes so you do not leave orphaned background workers.
+
+### In replay mode, are option chain/quotes still read from `master_broker.options_ohlc_1m_fromupstox`?
+
+Yes by default. The resolver uses `master_broker.options_ohlc_1m_fromupstox` unless you override it with `STRATEGY_RUNTIME_REPLAY_OPTIONS_TABLE`. This is separate from `STRATEGY_RUNTIME_REPLAY_DATA_TYPE`, which controls replay stream data (`ohlcv_1m`, `market_ticks`, etc.).
+
+### What does the backtest runner provide if I can run scripts directly?
+
+`START_BACKTEST_KIT.ps1` adds convenience and guardrails: env loading (including optional strategy config), interactive date prompts, date validation, smoke-mode normalization, and consistent argument/run summaries. It now always uses the strategy-runtime offline adapter path. Direct script calls remain best for automation or custom pipelines.
+
+### Is `Replay-paper` in `astra-kit` the same as replay kit?
+
+Runtime behavior is the same (historical data over replay WebSocket). Packaging is different: replay kit bundles/starts replay engine; `astra-kit` requires replay engine to be started externally.
+
+### Is there a live-live order mode (for example Zerodha orders with live data feed)?
+
+Yes. Use a live trading provider via `STRATEGY_RUNTIME_TRADING_PROVIDER` (for example `zerodha`) while keeping your chosen live data provider in `STRATEGY_RUNTIME_PROVIDER`. Validate extensively in paper mode first.
+
+### Is Unified Capture mode basically live-paper plus tick CSV capture? Is DB optional?
+
+Yes. Unified Capture is live-paper strategy plus recorder orchestration in one command. DB persistence is optional (`--enable-db`), and recommended practice is CSV-first daytime capture followed by EOD DB import.
+
+### Should `services/strategy_runtime` be part of the backtest kit?
+
+Yes. The refactored backtest and optimizer use the strategy-runtime offline adapter path, so `services/strategy_runtime` is a required part of the backtest kit.
+
+---
+
 Owner: Astra runtime track
-Last updated: 2026-04-30
+Last updated: 2026-05-08

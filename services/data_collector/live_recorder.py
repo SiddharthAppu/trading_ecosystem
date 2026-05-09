@@ -69,6 +69,9 @@ class LiveTickRecorder:
         self.enable_db_override: Optional[bool] = None
         self.ticks_received_total = 0
         self.greeks_received_total = 0
+        self.messages_received_total = 0
+        self.last_message_at: Optional[str] = None
+        self.last_tick_at: Optional[str] = None
         
         # Default to file-first capture unless explicitly enabled.
         self.enable_db = os.getenv("ASTRA_RECORDER_ENABLE_DB", "false").lower() in ("true", "1", "yes")
@@ -363,11 +366,47 @@ class LiveTickRecorder:
     def _on_upstox_error(self, *_args):
         self._ws_connected = False
 
+    def _coerce_upstox_message_dict(self, message: Any) -> Optional[dict]:
+        """Normalize Upstox SDK callback payload to a dict.
+
+        Depending on SDK/runtime version, callbacks may deliver payloads as dict,
+        JSON string/bytes, or model objects exposing to_dict().
+        """
+        if isinstance(message, dict):
+            return message
+
+        if isinstance(message, (bytes, bytearray)):
+            try:
+                message = message.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+
+        if isinstance(message, str):
+            try:
+                parsed = json.loads(message)
+                return parsed if isinstance(parsed, dict) else None
+            except json.JSONDecodeError:
+                return None
+
+        to_dict = getattr(message, "to_dict", None)
+        if callable(to_dict):
+            try:
+                parsed = to_dict()
+                return parsed if isinstance(parsed, dict) else None
+            except (TypeError, ValueError, AttributeError):
+                return None
+
+        return None
+
     def _on_upstox_message(self, message):
-        if not isinstance(message, dict):
+        payload = self._coerce_upstox_message_dict(message)
+        if not isinstance(payload, dict):
             return
 
-        feeds = message.get("feeds")
+        self.messages_received_total += 1
+        self.last_message_at = datetime.now(timezone.utc).isoformat()
+
+        feeds = payload.get("feeds")
         if not isinstance(feeds, dict):
             return
 
@@ -376,6 +415,7 @@ class LiveTickRecorder:
             if ltp is None:
                 continue
             self.ticks_received_total += 1
+            self.last_tick_at = datetime.now(timezone.utc).isoformat()
             volume = self._nested_find_first(feed_payload, ("vtt", "volume", "volTradedToday")) or 0
             oi = self._nested_find_first(feed_payload, ("oi", "open_interest", "openInterest")) or 0
             bid, ask = self._extract_upstox_bid_ask(feed_payload)
@@ -515,6 +555,9 @@ class LiveTickRecorder:
             "enable_db_override": self.enable_db_override,
             "ticks_received_total": self.ticks_received_total,
             "greeks_received_total": self.greeks_received_total,
+            "messages_received_total": self.messages_received_total,
+            "last_message_at": self.last_message_at,
+            "last_tick_at": self.last_tick_at,
         }
 
     async def event_generator(self):

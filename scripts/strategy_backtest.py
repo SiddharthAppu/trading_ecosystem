@@ -225,7 +225,7 @@ def run_backtest(
     sl_pct: float = 0.5,
     index_symbol: str = "NSE:NIFTY50-INDEX",
     lot_size: int = 75,
-    engine: str = "legacy",
+    engine: str = "adapter",
     strategy_name: str = "nifty_trend_options",
     timeframe: str = "5m",
     log_file: str = "logs/strategy_runtime/runtime.log",
@@ -590,30 +590,24 @@ def main() -> None:
     parser.add_argument("--lot-size", type=int, default=75)
     parser.add_argument("--index-symbol", default="NSE:NIFTY50-INDEX")
     parser.add_argument(
-        "--engine",
-        choices=["legacy", "adapter"],
-        default="legacy",
-        help="Execution engine. Default legacy preserves current behavior.",
-    )
-    parser.add_argument(
         "--strategy-name",
         default="nifty_trend_options",
-        help="Strategy name metadata written into adapter artifacts.",
+        help="Strategy name metadata written into backtest artifacts.",
     )
     parser.add_argument(
         "--timeframe",
         default="5m",
-        help="Timeframe metadata written into adapter artifacts.",
+        help="Timeframe metadata written into backtest artifacts.",
     )
     parser.add_argument(
         "--log-file",
         default="logs/strategy_runtime/runtime.log",
-        help="Main log path used by adapter artifacts.",
+        help="Main log path used by backtest artifacts.",
     )
     parser.add_argument(
         "--run-name",
         default="",
-        help="Optional run name for adapter artifacts.",
+        help="Optional run name for backtest artifacts.",
     )
     parser.add_argument(
         "--export-trades", metavar="FILE",
@@ -637,7 +631,7 @@ def main() -> None:
             sl_pct=args.sl_pct,
             lot_size=args.lot_size,
             index_symbol=args.index_symbol,
-            engine=args.engine,
+            engine="adapter",
             strategy_name=args.strategy_name,
             timeframe=args.timeframe,
             log_file=args.log_file,

@@ -2,7 +2,7 @@
 """
 Grid-search parameter optimizer for nifty_trend_options strategy.
 
-Runs backtest_nifty_trend.run_backtest() for every combination of parameters
+Runs strategy_backtest.run_backtest() for every combination of parameters
 defined in the GRID below and ranks them by total PnL (or win rate).
 
 Edit the GRID dict to add/remove values before running.
@@ -76,30 +76,24 @@ def main() -> None:
     parser.add_argument("--lot-size",     type=int, default=75)
     parser.add_argument("--index-symbol", default="NSE:NIFTY50-INDEX")
     parser.add_argument(
-        "--engine",
-        choices=["legacy", "adapter"],
-        default="legacy",
-        help="Execution engine. Default legacy preserves current behavior.",
-    )
-    parser.add_argument(
         "--strategy-name",
         default="nifty_trend_options",
-        help="Strategy name metadata used when engine=adapter.",
+        help="Strategy name metadata used for optimizer backtest artifacts.",
     )
     parser.add_argument(
         "--timeframe",
         default="5m",
-        help="Timeframe metadata used when engine=adapter.",
+        help="Timeframe metadata used for optimizer backtest artifacts.",
     )
     parser.add_argument(
         "--log-file",
         default="logs/strategy_runtime/runtime.log",
-        help="Main log path used when engine=adapter.",
+        help="Main log path used for optimizer backtest artifacts.",
     )
     parser.add_argument(
         "--run-name-prefix",
         default="opt",
-        help="Run name prefix used when engine=adapter.",
+        help="Run name prefix used for optimizer backtest artifacts.",
     )
     parser.add_argument(
         "--top", type=int, default=10, help="How many top results to display"
@@ -156,11 +150,11 @@ def main() -> None:
                     sl_pct=params["sl_pct"],
                     lot_size=args.lot_size,
                     index_symbol=args.index_symbol,
-                    engine=args.engine,
+                    engine="adapter",
                     strategy_name=args.strategy_name,
                     timeframe=args.timeframe,
                     log_file=args.log_file,
-                    run_name=f"{args.run_name_prefix}_{idx:04d}" if args.engine == "adapter" else "",
+                    run_name=f"{args.run_name_prefix}_{idx:04d}",
                     verbose=False,
                 )
                 summary = result["summary"]

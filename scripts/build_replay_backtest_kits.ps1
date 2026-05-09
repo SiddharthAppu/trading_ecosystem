@@ -38,6 +38,8 @@ $replayItems = @(
 $backtestItems = @(
     @{ Source = "scripts\strategy_backtest.py"; Target = "scripts\strategy_backtest.py" },
     @{ Source = "scripts\strategy_optimize.py"; Target = "scripts\strategy_optimize.py" },
+    @{ Source = "services\strategy_runtime"; Target = "services\strategy_runtime" },
+    @{ Source = "services\strategy_runtime\astra-kit-requirements.txt"; Target = "services\strategy_runtime\astra-kit-requirements.txt" },
     @{ Source = "packages\trading_core"; Target = "packages\trading_core" },
     @{ Source = "config\.env"; Target = "config\.env"; Optional = $true },
     @{ Source = "services\strategy_runtime\strategies\nifty_trend_options\STRATEGY.md"; Target = "docs\nifty_trend_options_STRATEGY.md"; Optional = $true },
