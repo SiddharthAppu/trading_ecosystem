@@ -36,10 +36,18 @@ param(
     [ValidateSet("interactive", "non-interactive")]
     [string]$ConfirmationMode = "interactive",
     [string]$GlobalEnv = "",
-    [string]$EnvFile = ""
+    [string]$EnvFile = "",
+    [switch]$h,
+    [switch]$Help
 )
 
 $ErrorActionPreference = 'Stop'
+
+# ── Help option ────────────────────────────────────────────────────────────────
+if ($PSBoundParameters.ContainsKey('h') -or $PSBoundParameters.ContainsKey('Help')) {
+    Get-Help -Full $PSCommandPath
+    exit 0
+}
 
 # ── Resolve kit root ───────────────────────────────────────────────────────────
 $KIT_ROOT    = $PSScriptRoot

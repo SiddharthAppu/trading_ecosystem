@@ -2,15 +2,16 @@
 """
 Grid-search parameter optimizer for nifty_trend_options strategy.
 
-Runs strategy_backtest.run_backtest() for every combination of parameters
-defined in the GRID below and ranks them by total PnL (or win rate).
+Runs strategy_runtime offline adapter backtests for parameter combinations
+defined in a JSON optimizer config and ranks them by total PnL (or win rate).
 
-Edit the GRID dict to add/remove values before running.
+Supports fixed/range parameter dimensions and early-stop probe windows.
 
 Usage:
     python scripts/strategy_optimize.py \\
       --from 2026-04-01 --to 2026-04-28 \\
-      --top 10 --sort-by total_pnl
+    --top 10 --sort-by total_pnl \
+    --optimizer-config config/strategy_optimize_ranges.json
 
 After seeing the top results, copy the winning params into:
   config/strategy_runtime.paper_live.env   (or the .paper_replay.env)
@@ -43,7 +44,8 @@ if not DATABASE_URL:
     print("ERROR: DATABASE_URL not set. Check config/.env")
     sys.exit(1)
 
-# strategy_backtest.py is in the same directory as this script
+# strategy_backtest.py is in the same directory as this script.
+# We reuse its DB loading and adapter bridge helpers.
 sys.path.insert(0, os.path.dirname(__file__))
 from strategy_backtest import _load_index_bars, _run_strategy_adapter_mode, aggregate_to_5m  # noqa: E402
 

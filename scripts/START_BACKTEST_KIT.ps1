@@ -63,10 +63,18 @@ param(
     [string]$Symbol = "",
     [string]$EnvFile = "",
     [string]$StrategyConfig = "",
-    [string]$OptimizerConfig = ""
+    [string]$OptimizerConfig = "",
+    [switch]$h,
+    [switch]$Help
 )
 
 $ErrorActionPreference = 'Stop'
+
+# ── Help option ────────────────────────────────────────────────────────────────
+if ($PSBoundParameters.ContainsKey('h') -or $PSBoundParameters.ContainsKey('Help')) {
+    Get-Help -Full $PSCommandPath
+    exit 0
+}
 
 # ── Resolve kit root ───────────────────────────────────────────────────────────
 $scriptDir = $PSScriptRoot
@@ -564,7 +572,7 @@ Write-Host "  Lot size         : $effectiveLotSize" -ForegroundColor White
 Write-Host "  Capital model    : $effectiveCapitalModel" -ForegroundColor White
 Write-Host "  Initial capital  : $effectiveInitialCapital" -ForegroundColor White
 Write-Host "  EMA/SMA          : $effectiveEmaPeriod / $effectiveSmaPeriod" -ForegroundColor White
-Write-Host "  MACD             : $effectiveMacdFast/$effectiveMacdSlow/$effectiveMacdSignal" -ForegroundColor White
+Write-Host "  MACD             : fast=$effectiveMacdFast slow=$effectiveMacdSlow signal=$effectiveMacdSignal" -ForegroundColor White
 Write-Host "  Premium target   : $effectiveTargetPremium  +/-$effectivePremiumTolerance" -ForegroundColor White
 Write-Host "  Stop loss pct    : $effectiveStopLossPct" -ForegroundColor White
 Write-Host "  Indicators       : $($env:STRATEGY_RUNTIME_INDICATORS)" -ForegroundColor White
