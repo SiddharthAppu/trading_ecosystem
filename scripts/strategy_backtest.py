@@ -247,16 +247,25 @@ def run_backtest(
         }
     """
     if verbose:
+        _lot_qty_label = "auto (-1) \u2014 sized from capital each bar" if lot_quantity == -1 else str(lot_quantity)
         print(f"\n{'='*62}")
-        print(f"  Backtest  {from_date} → {to_date}")
-        print(
-            f"  EMA={ema_period}  SMA={sma_period}  "
-            f"MACD={macd_fast}/{macd_slow}/{macd_signal_period}"
-        )
-        print(
-            f"  target_premium={target_premium}  ±{premium_tolerance}  "
-            f"SL={sl_pct*100:.0f}%  lots={lot_quantity}  lot_size={lot_size}"
-        )
+        print(f"  Backtest configuration")
+        print(f"  {'\u2500'*58}")
+        print(f"  Strategy               : {strategy_name}")
+        print(f"  Date range             : {from_date} -> {to_date}")
+        print(f"  Timeframe              : {timeframe}")
+        print(f"  Symbol                 : {index_symbol}")
+        print(f"  {'\u2500'*58}")
+        print(f"  Capital model          : {capital_model}")
+        print(f"  Initial capital        : Rs {initial_capital:,.2f}")
+        print(f"  Lot quantity           : {_lot_qty_label}")
+        print(f"  Lot size               : {lot_size}")
+        print(f"  {'\u2500'*58}")
+        print(f"  EMA period             : {ema_period}")
+        print(f"  SMA period             : {sma_period}")
+        print(f"  MACD                   : {macd_fast}/{macd_slow}/{macd_signal_period}")
+        print(f"  Target premium         : {target_premium}  +/-{premium_tolerance}")
+        print(f"  Stop loss pct          : {sl_pct*100:.0f}%  (options premium SL)")
         print(f"{'='*62}")
 
     # 1. Index bars → 5m

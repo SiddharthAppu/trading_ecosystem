@@ -29,12 +29,22 @@
     Runs a quick adapter backtest smoke check and auto-generates a run name when
     not provided.
 
+.PARAMETER StrategyConfig
+    Path to a strategy env file. Defaults to config/strategy_runtime.backtest_example.env.
+    Use this to supply per-strategy sizing, capital model, and indicator settings.
+    See config/strategy_runtime.backtest_example.env for all supported keys and comments.
+
+.PARAMETER OptimizerConfig
+    Path to optimizer JSON config used only in optimize mode.
+    Defaults to config/strategy_optimize_ranges.json.
+
 .EXAMPLE
     .\START_BACKTEST_KIT.ps1
     .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28
     .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -Mode optimize -Top 15
     .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -Symbol "NSE_INDEX|Nifty 50"
     .\START_BACKTEST_KIT.ps1 -Smoke -From 2026-04-28 -To 2026-04-28
+    .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -StrategyConfig "config\strategy_runtime.backtest_example.env"
 #>
 param(
     [string]$From   = "",
@@ -52,7 +62,8 @@ param(
     [switch]$Smoke,
     [string]$Symbol = "",
     [string]$EnvFile = "",
-    [string]$StrategyConfig = ""
+    [string]$StrategyConfig = "",
+    [string]$OptimizerConfig = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -72,7 +83,8 @@ $STRATEGY_RUNTIME_DIR = "$KIT_ROOT\services\strategy_runtime"
 $OFFLINE_ADAPTER_RUNNER = "$STRATEGY_RUNTIME_DIR\offline_adapter\runner.py"
 $RUNTIME_REQUIREMENTS = "$STRATEGY_RUNTIME_DIR\astra-kit-requirements.txt"
 $GLOBAL_ENV  = if ($EnvFile) { if ([System.IO.Path]::IsPathRooted($EnvFile)) { $EnvFile } else { Join-Path $KIT_ROOT $EnvFile } } else { "$KIT_ROOT\config\.env" }
-$STRATEGY_ENV = if ($StrategyConfig) { if ([System.IO.Path]::IsPathRooted($StrategyConfig)) { $StrategyConfig } else { Join-Path $KIT_ROOT $StrategyConfig } } else { "$KIT_ROOT\config\strategy_runtime.paper_replay.env" }
+$STRATEGY_ENV = if ($StrategyConfig) { if ([System.IO.Path]::IsPathRooted($StrategyConfig)) { $StrategyConfig } else { Join-Path $KIT_ROOT $StrategyConfig } } else { "$KIT_ROOT\config\strategy_runtime.backtest_example.env" }
+$OPTIMIZER_CFG = if ($OptimizerConfig) { if ([System.IO.Path]::IsPathRooted($OptimizerConfig)) { $OptimizerConfig } else { Join-Path $KIT_ROOT $OptimizerConfig } } else { "$KIT_ROOT\config\strategy_optimize_ranges.json" }
 
 # ── Banner ─────────────────────────────────────────────────────────────────────
 Write-Host ""
@@ -159,6 +171,46 @@ function Normalize-DateInput {
     exit 1
 }
 
+function Get-FirstEnvValue {
+    param([string[]]$Names)
+
+    foreach ($name in $Names) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            return $value.Trim()
+        }
+    }
+    return ""
+}
+
+function Parse-IntOrExit {
+    param(
+        [string]$Value,
+        [string]$FieldName
+    )
+
+    $parsed = 0
+    if (-not [int]::TryParse($Value, [ref]$parsed)) {
+        Write-Host "[ERROR] Invalid integer for ${FieldName}: $Value" -ForegroundColor Red
+        exit 1
+    }
+    return $parsed
+}
+
+function Parse-FloatOrExit {
+    param(
+        [string]$Value,
+        [string]$FieldName
+    )
+
+    $parsed = 0.0
+    if (-not [double]::TryParse($Value, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$parsed)) {
+        Write-Host "[ERROR] Invalid number for ${FieldName}: $Value" -ForegroundColor Red
+        exit 1
+    }
+    return $parsed
+}
+
 if (Test-Path $GLOBAL_ENV) {
     Import-EnvFile $GLOBAL_ENV
     Write-Host "[INFO] Loaded credentials from $GLOBAL_ENV" -ForegroundColor DarkGray
@@ -201,6 +253,8 @@ $effectiveLogFile = if ($PSBoundParameters.ContainsKey("LogFile") -and -not [str
 
 $effectiveIndexSymbol = if ($Symbol -ne "") {
     $Symbol
+} elseif (-not [string]::IsNullOrWhiteSpace($env:STRATEGY_RUNTIME_SYMBOL)) {
+    $env:STRATEGY_RUNTIME_SYMBOL
 } else {
     "NSE:NIFTY50-INDEX"
 }
@@ -227,6 +281,66 @@ $logFileSource = if ($PSBoundParameters.ContainsKey("LogFile") -and -not [string
 } else {
     "default"
 }
+
+$symbolSource = if ($Symbol -ne "") {
+    "CLI"
+} elseif (-not [string]::IsNullOrWhiteSpace($env:STRATEGY_RUNTIME_SYMBOL)) {
+    "config"
+} else {
+    "default"
+}
+
+$lotSizeRaw = Get-FirstEnvValue @("STRATEGY_RUNTIME_LOT_SIZE")
+if ([string]::IsNullOrWhiteSpace($lotSizeRaw)) { $lotSizeRaw = "75" }
+$effectiveLotSize = Parse-IntOrExit -Value $lotSizeRaw -FieldName "STRATEGY_RUNTIME_LOT_SIZE"
+
+$lotQtyRaw = Get-FirstEnvValue @("STRATEGY_RUNTIME_LOT_QUANTITY")
+if ([string]::IsNullOrWhiteSpace($lotQtyRaw)) { $lotQtyRaw = "1" }
+$effectiveLotQuantity = Parse-IntOrExit -Value $lotQtyRaw -FieldName "STRATEGY_RUNTIME_LOT_QUANTITY"
+
+$initialCapitalRaw = Get-FirstEnvValue @("STRATEGY_RUNTIME_INITIAL_CAPITAL")
+if ([string]::IsNullOrWhiteSpace($initialCapitalRaw)) { $initialCapitalRaw = "100000" }
+$effectiveInitialCapital = Parse-FloatOrExit -Value $initialCapitalRaw -FieldName "STRATEGY_RUNTIME_INITIAL_CAPITAL"
+
+$capitalModelRaw = Get-FirstEnvValue @("STRATEGY_RUNTIME_CAPITAL_MODEL")
+if ([string]::IsNullOrWhiteSpace($capitalModelRaw)) { $capitalModelRaw = "non_compounding" }
+$effectiveCapitalModel = $capitalModelRaw.Trim().ToLowerInvariant()
+if ($effectiveCapitalModel -ne "non_compounding" -and $effectiveCapitalModel -ne "compounding") {
+    Write-Host "[WARN] Unknown STRATEGY_RUNTIME_CAPITAL_MODEL '$capitalModelRaw'; using non_compounding" -ForegroundColor Yellow
+    $effectiveCapitalModel = "non_compounding"
+}
+
+$emaPeriodRaw = Get-FirstEnvValue @("NIFTY_EMA_PERIOD", "EMA_PERIOD")
+if ([string]::IsNullOrWhiteSpace($emaPeriodRaw)) { $emaPeriodRaw = "20" }
+$effectiveEmaPeriod = Parse-IntOrExit -Value $emaPeriodRaw -FieldName "NIFTY_EMA_PERIOD"
+
+$smaPeriodRaw = Get-FirstEnvValue @("NIFTY_SMA_PERIOD", "SMA_PERIOD")
+if ([string]::IsNullOrWhiteSpace($smaPeriodRaw)) { $smaPeriodRaw = "20" }
+$effectiveSmaPeriod = Parse-IntOrExit -Value $smaPeriodRaw -FieldName "NIFTY_SMA_PERIOD"
+
+$macdFastRaw = Get-FirstEnvValue @("NIFTY_MACD_FAST", "MACD_FAST")
+if ([string]::IsNullOrWhiteSpace($macdFastRaw)) { $macdFastRaw = "12" }
+$effectiveMacdFast = Parse-IntOrExit -Value $macdFastRaw -FieldName "NIFTY_MACD_FAST"
+
+$macdSlowRaw = Get-FirstEnvValue @("NIFTY_MACD_SLOW", "MACD_SLOW")
+if ([string]::IsNullOrWhiteSpace($macdSlowRaw)) { $macdSlowRaw = "26" }
+$effectiveMacdSlow = Parse-IntOrExit -Value $macdSlowRaw -FieldName "NIFTY_MACD_SLOW"
+
+$macdSignalRaw = Get-FirstEnvValue @("NIFTY_MACD_SIGNAL", "MACD_SIGNAL")
+if ([string]::IsNullOrWhiteSpace($macdSignalRaw)) { $macdSignalRaw = "9" }
+$effectiveMacdSignal = Parse-IntOrExit -Value $macdSignalRaw -FieldName "NIFTY_MACD_SIGNAL"
+
+$targetPremiumRaw = Get-FirstEnvValue @("NIFTY_TARGET_PREMIUM", "NIFTY_PREMIUM_TARGET")
+if ([string]::IsNullOrWhiteSpace($targetPremiumRaw)) { $targetPremiumRaw = "200.0" }
+$effectiveTargetPremium = Parse-FloatOrExit -Value $targetPremiumRaw -FieldName "NIFTY_TARGET_PREMIUM"
+
+$premiumToleranceRaw = Get-FirstEnvValue @("NIFTY_PREMIUM_TOLERANCE")
+if ([string]::IsNullOrWhiteSpace($premiumToleranceRaw)) { $premiumToleranceRaw = "50.0" }
+$effectivePremiumTolerance = Parse-FloatOrExit -Value $premiumToleranceRaw -FieldName "NIFTY_PREMIUM_TOLERANCE"
+
+$stopLossPctRaw = Get-FirstEnvValue @("NIFTY_STOP_LOSS_PREMIUM_PCT", "NIFTY_STOP_LOSS_PCT")
+if ([string]::IsNullOrWhiteSpace($stopLossPctRaw)) { $stopLossPctRaw = "0.5" }
+$effectiveStopLossPct = Parse-FloatOrExit -Value $stopLossPctRaw -FieldName "NIFTY_STOP_LOSS_PREMIUM_PCT"
 
 # ── Runtime dependency preflight ─────────────────────────────────────────────
 & $PYTHON_EXE -c "import psycopg2" 2>$null
@@ -440,6 +554,26 @@ if ($null -ne $preflight -and $preflight.ok) {
     Write-Host "  [WARN] Preflight row-count check returned no parseable output." -ForegroundColor Yellow
 }
 
+Write-Host ""
+Write-Host "[PREFLIGHT] Resolved backtest configuration (effective)" -ForegroundColor Cyan
+Write-Host "  Strategy         : $effectiveStrategyName ($strategyNameSource)" -ForegroundColor White
+Write-Host "  Timeframe        : $effectiveTimeframe ($timeframeSource)" -ForegroundColor White
+Write-Host "  Symbol           : $effectiveIndexSymbol ($symbolSource)" -ForegroundColor White
+Write-Host "  Lot quantity     : $effectiveLotQuantity" -ForegroundColor White
+Write-Host "  Lot size         : $effectiveLotSize" -ForegroundColor White
+Write-Host "  Capital model    : $effectiveCapitalModel" -ForegroundColor White
+Write-Host "  Initial capital  : $effectiveInitialCapital" -ForegroundColor White
+Write-Host "  EMA/SMA          : $effectiveEmaPeriod / $effectiveSmaPeriod" -ForegroundColor White
+Write-Host "  MACD             : $effectiveMacdFast/$effectiveMacdSlow/$effectiveMacdSignal" -ForegroundColor White
+Write-Host "  Premium target   : $effectiveTargetPremium  +/-$effectivePremiumTolerance" -ForegroundColor White
+Write-Host "  Stop loss pct    : $effectiveStopLossPct" -ForegroundColor White
+Write-Host "  Indicators       : $($env:STRATEGY_RUNTIME_INDICATORS)" -ForegroundColor White
+if ($Mode -eq "optimize") {
+    Write-Host "" 
+    Write-Host "  [NOTE] Optimize mode uses parameter ranges from scripts/strategy_optimize.py GRID." -ForegroundColor DarkYellow
+    Write-Host "         EMA/SMA/MACD/target premium/tolerance/SL shown above are baseline values only." -ForegroundColor DarkYellow
+}
+
 if ($ConfirmationMode -eq "interactive") {
     Write-Host ""
     $confirm = Read-Host "Proceed with $Mode run? [Y/N]"
@@ -455,16 +589,33 @@ $args_list = @("--from", $From, "--to", $To)
 $args_list += @(
     "--strategy-name", $effectiveStrategyName,
     "--timeframe", $effectiveTimeframe,
-    "--log-file", $effectiveLogFile
+    "--log-file", $effectiveLogFile,
+    "--index-symbol", $effectiveIndexSymbol,
+    "--lot-size", $effectiveLotSize,
+    "--lot-quantity", $effectiveLotQuantity,
+    "--initial-capital", $effectiveInitialCapital,
+    "--capital-model", $effectiveCapitalModel
 )
 
-if ($Symbol -ne "") {
-    $args_list += @("--index-symbol", $Symbol)
+# strategy_optimize.py uses an internal GRID for these parameters and does not
+# accept them as CLI flags, so pass them only to strategy_backtest.py mode.
+if ($Mode -ne "optimize") {
+    $args_list += @(
+        "--ema-period", $effectiveEmaPeriod,
+        "--sma-period", $effectiveSmaPeriod,
+        "--macd-fast", $effectiveMacdFast,
+        "--macd-slow", $effectiveMacdSlow,
+        "--macd-signal", $effectiveMacdSignal,
+        "--target-premium", $effectiveTargetPremium,
+        "--premium-tolerance", $effectivePremiumTolerance,
+        "--sl-pct", $effectiveStopLossPct
+    )
 }
 
 if ($Mode -eq "optimize") {
     $args_list += @("--top", $Top)
     $args_list += @("--run-name-prefix", $RunNamePrefix)
+    $args_list += @("--optimizer-config", $OPTIMIZER_CFG)
 } elseif ($RunName -ne "") {
     $args_list += @("--run-name", $RunName)
 }
@@ -478,6 +629,7 @@ Write-Host "Log file   : $effectiveLogFile"           -ForegroundColor White
 if ($Mode -eq "optimize") {
     Write-Host "Top results: $Top"            -ForegroundColor White
     Write-Host "Run prefix : $RunNamePrefix"  -ForegroundColor White
+    Write-Host "Opt config : $OPTIMIZER_CFG"  -ForegroundColor White
 } elseif ($RunName -ne "") {
     Write-Host "Run name   : $RunName"         -ForegroundColor White
 }

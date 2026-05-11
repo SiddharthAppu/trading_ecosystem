@@ -60,6 +60,13 @@ To add a new strategy:
 - **API Authentication**: Check `config/auth/` for valid Fyers/Upstox access tokens.
 - **Replay Studio While Daily Capture Runs**: Prefer `.\start_platform.bat replay-studio`. It avoids starting a second collector instance and now waits for TimescaleDB to become healthy before launching services.
 
+## 🧪 Backtest Kit Notes
+- For standalone replay/backtest/live kit operation, use [Astra_UserGuide.md](Astra_UserGuide.md).
+- Backtest optimize artifacts are generated under `logs/strategy_runtime/` and `logs/run_summaries/` in the kit directory.
+- If present in kit root, open these pages for quick navigation:
+    - `ARTIFACT_INDEX.html` (all artifacts)
+    - `ARTIFACT_INDEX_LATEST_RUN.html` (latest optimize run)
+
 ## 📡 Live Recorder & EOD Workflows
 
 ### Single Expiry Worker

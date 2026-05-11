@@ -42,6 +42,8 @@ $backtestItems = @(
     @{ Source = "services\strategy_runtime\astra-kit-requirements.txt"; Target = "services\strategy_runtime\astra-kit-requirements.txt" },
     @{ Source = "packages\trading_core"; Target = "packages\trading_core" },
     @{ Source = "config\.env"; Target = "config\.env"; Optional = $true },
+    @{ Source = "config\strategy_runtime.backtest_example.env"; Target = "config\strategy_runtime.backtest_example.env" },
+    @{ Source = "config\strategy_optimize_ranges.json"; Target = "config\strategy_optimize_ranges.json" },
     @{ Source = "services\strategy_runtime\strategies\nifty_trend_options\STRATEGY.md"; Target = "docs\nifty_trend_options_STRATEGY.md"; Optional = $true },
     @{ Source = "Astra_UserGuide.md"; Target = "docs\Astra_UserGuide.md"; Optional = $true },
     @{ Source = "scripts\START_BACKTEST_KIT.ps1"; Target = "START_BACKTEST_KIT.ps1" }

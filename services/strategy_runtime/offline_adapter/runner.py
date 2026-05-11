@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import math
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -65,6 +67,98 @@ def _append_lines(path: Path, lines: list[str]) -> None:
         handle.write("\n".join(lines) + "\n")
 
 
+def _year_fraction(start: datetime, end: datetime) -> float:
+    return max((end - start).total_seconds() / (365.25 * 24 * 3600), 1e-9)
+
+
+def _parse_iso_date(date_value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(date_value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _compute_xirr(cash_flows: list[tuple[datetime, float]]) -> float | None:
+    if len(cash_flows) < 2:
+        return None
+    amounts = [float(amount) for _, amount in cash_flows]
+    if not any(amount < 0 for amount in amounts) or not any(amount > 0 for amount in amounts):
+        return None
+
+    t0 = min(ts for ts, _ in cash_flows)
+
+    def _npv(rate: float) -> float:
+        total = 0.0
+        for ts, amount in cash_flows:
+            years = _year_fraction(t0, ts)
+            total += amount / ((1.0 + rate) ** years)
+        return total
+
+    def _d_npv(rate: float) -> float:
+        total = 0.0
+        for ts, amount in cash_flows:
+            years = _year_fraction(t0, ts)
+            total += (-years * amount) / ((1.0 + rate) ** (years + 1.0))
+        return total
+
+    # Newton-Raphson first for fast convergence.
+    rate = 0.1
+    for _ in range(100):
+        value = _npv(rate)
+        deriv = _d_npv(rate)
+        if abs(deriv) < 1e-12:
+            break
+        next_rate = rate - (value / deriv)
+        if next_rate <= -0.999999:
+            break
+        if abs(next_rate - rate) < 1e-10:
+            if math.isfinite(next_rate):
+                return next_rate
+            break
+        rate = next_rate
+
+    # Bisection fallback for robustness.
+    low = -0.9999
+    high = 10.0
+    npv_low = _npv(low)
+    npv_high = _npv(high)
+    if npv_low == 0:
+        return low
+    if npv_high == 0:
+        return high
+    if npv_low * npv_high > 0:
+        return None
+
+    for _ in range(200):
+        mid = (low + high) / 2.0
+        npv_mid = _npv(mid)
+        if abs(npv_mid) < 1e-8:
+            return mid
+        if npv_low * npv_mid < 0:
+            high = mid
+            npv_high = npv_mid
+        else:
+            low = mid
+            npv_low = npv_mid
+    return (low + high) / 2.0
+
+
+def _compute_cagr(
+    *,
+    start_ts: datetime,
+    end_ts: datetime,
+    total_invested_capital: float,
+    ending_capital: float,
+) -> float | None:
+    if total_invested_capital <= 0 or ending_capital <= 0:
+        return None
+    years = _year_fraction(start_ts, end_ts)
+    # Very short ranges (for example, intraday debug runs) produce unstable annualization.
+    if years < (1.0 / 365.25):
+        return None
+    return (ending_capital / total_invested_capital) ** (1.0 / years) - 1.0
+
+
 def _summarize_trades(
     trades: list[dict[str, Any]],
     bars_5m: list[dict[str, Any]],
@@ -74,6 +168,9 @@ def _summarize_trades(
     ending_capital: float,
     refill_events: int,
     refill_amount: float,
+    xirr: float | None,
+    cagr: float | None,
+    insufficient_funds_skips: int = 0,
 ) -> dict[str, Any]:
     pnls = [float(trade.get("pnl", 0.0)) for trade in trades]
     wins = [pnl for pnl in pnls if pnl > 0]
@@ -120,8 +217,12 @@ def _summarize_trades(
         "pnl_model": "additive_per_trade",
         "initial_capital": round(initial_capital, 2),
         "ending_capital": round(ending_capital, 2),
+        "total_invested_capital": round(initial_capital + refill_amount, 2),
         "refill_events": int(refill_events),
         "refill_amount": round(refill_amount, 2),
+        "insufficient_funds_skips": int(insufficient_funds_skips),
+        "xirr_pct": round(xirr * 100.0, 4) if xirr is not None else None,
+        "cagr_pct": round(cagr * 100.0, 4) if cagr is not None else None,
     }
 
 
@@ -138,6 +239,47 @@ def run_strategy_adapter_backtest(
     log_file: str,
     run_name: str | None = None,
 ) -> AdapterBacktestResult:
+    # ── Print run configuration before any async work ──────────────────────
+    _raw_lot_qty = int(strategy_params.get("lot_quantity", 1))
+    _lot_size = max(1, int(strategy_params.get("lot_size", 1)))
+    _initial_capital = float(strategy_params.get("initial_capital", 100000.0))
+    _capital_model = str(strategy_params.get("capital_model", "non_compounding")).strip().lower()
+    _auto_lot = _raw_lot_qty == -1
+    _lot_qty_label = "auto (-1) — sized from capital each bar" if _auto_lot else str(_raw_lot_qty)
+    _stop_loss_pct = strategy_params.get("stop_loss_pct", "")
+    _trailing_stop_pct = strategy_params.get("trailing_stop_pct", "")
+    _max_position_lots = strategy_params.get("max_position_lots", "")
+    print(flush=True)
+    print("  ── Backtest configuration ──────────────────────────────────────", flush=True)
+    print(f"    Strategy               : {strategy_name}", flush=True)
+    print(f"    Date range             : {from_date} -> {to_date}", flush=True)
+    print(f"    Timeframe              : {timeframe}", flush=True)
+    print(f"    Symbol                 : {symbol}", flush=True)
+    print(f"    Indicators             : {', '.join(indicators) if indicators else 'none'}", flush=True)
+    print(f"    Capital model          : {_capital_model}", flush=True)
+    print(f"    Initial capital        : Rs {_initial_capital:,.2f}", flush=True)
+    print(f"    Lot quantity           : {_lot_qty_label}", flush=True)
+    print(f"    Lot size               : {_lot_size}", flush=True)
+    if _stop_loss_pct != "":
+        print(f"    Stop loss pct          : {_stop_loss_pct} (live/replay only, not enforced in BT)", flush=True)
+    if _trailing_stop_pct != "":
+        print(f"    Trailing stop pct      : {_trailing_stop_pct} (live/replay only, not enforced in BT)", flush=True)
+    if _max_position_lots != "":
+        print(f"    Max position lots      : {_max_position_lots} (live/replay only, not enforced in BT)", flush=True)
+    print(f"    Total 5m bars          : {len(bars_5m)}", flush=True)
+    _extra_keys = {
+        k: v for k, v in strategy_params.items()
+        if k not in {"lot_quantity", "lot_size", "initial_capital", "capital_model",
+                     "stop_loss_pct", "trailing_stop_pct", "max_position_lots",
+                     "provider", "timeframe", "underlying_symbol"}
+    }
+    if _extra_keys:
+        print("    Strategy params        :", flush=True)
+        for k, v in sorted(_extra_keys.items()):
+            print(f"      {k:<26}: {v}", flush=True)
+    print("  ────────────────────────────────────────────────────────────────", flush=True)
+    print(flush=True)
+    # ───────────────────────────────────────────────────────────────────────
     return asyncio.run(
         _run_strategy_adapter_backtest(
             bars_5m=bars_5m,
@@ -176,12 +318,16 @@ async def _run_strategy_adapter_backtest(
 
     initial_capital = float(strategy_params.get("initial_capital", 100000.0))
     lot_size = max(1, int(strategy_params.get("lot_size", 1)))
-    lot_quantity = max(1, int(strategy_params.get("lot_quantity", 1)))
+    _raw_lot_quantity = int(strategy_params.get("lot_quantity", 1))
+    auto_lot_mode = _raw_lot_quantity == -1
+    lot_quantity = 1 if auto_lot_mode else max(1, _raw_lot_quantity)
     capital_model = str(strategy_params.get("capital_model", "non_compounding")).strip().lower()
 
     capital_available = initial_capital
     refill_events = 0
     refill_amount = 0.0
+    insufficient_funds_skips = 0
+    refill_cash_flows: list[tuple[datetime, float]] = []
 
     def _journal_capital_context() -> dict[str, Any]:
         return {
@@ -357,6 +503,7 @@ async def _run_strategy_adapter_backtest(
         if refill_topup > 0:
             refill_events += 1
             refill_amount += refill_topup
+            refill_cash_flows.append((fill.filled_at, refill_topup))
             refill_before = float(capital_available)
             capital_available = float(capital_available + refill_topup)
             await journal.log_event(
@@ -419,8 +566,32 @@ async def _run_strategy_adapter_backtest(
             )
 
             if hasattr(strategy, "evaluate_snapshot"):
-                if capital_model == "compounding":
-                    one_lot_cost = float(bar.close) * lot_size
+                one_lot_cost = float(bar.close) * lot_size if lot_size > 0 else 0.0
+                # Auto-lot sizing (-1 sentinel) applies to both capital models.
+                if auto_lot_mode:
+                    if one_lot_cost > 0:
+                        dynamic_lots = math.floor(capital_available / one_lot_cost)
+                    else:
+                        dynamic_lots = 1
+                    # In auto-lot mode: skip bar if can't afford one lot and no open position.
+                    if dynamic_lots < 1 and not open_entries:
+                        insufficient_funds_skips += 1
+                        await journal.log_event(
+                            "INSUFFICIENT_FUNDS_SKIP",
+                            symbol,
+                            {
+                                "required_for_one_lot": round(one_lot_cost, 2),
+                                "capital_available": round(capital_available, 2),
+                                "lot_size": lot_size,
+                                "capital_model": capital_model,
+                                "reason": "insufficient_capital_for_one_lot",
+                            },
+                            basket_id="none",
+                            event_ts=isoformat_ist(bar.timestamp),
+                        )
+                        continue
+                    ctx.params["lot_quantity"] = max(1, dynamic_lots)
+                elif capital_model == "compounding":
                     if one_lot_cost > 0:
                         dynamic_lots = max(1, math.floor(capital_available / one_lot_cost))
                     else:
@@ -450,6 +621,30 @@ async def _run_strategy_adapter_backtest(
     finally:
         await DatabaseManager.close_pool()
 
+    from_date_dt = _parse_iso_date(from_date)
+    to_date_dt = _parse_iso_date(to_date)
+    if from_date_dt is not None and to_date_dt is not None:
+        run_start_ts = from_date_dt
+        run_end_ts = to_date_dt + timedelta(days=1)
+    elif bars_5m:
+        run_start_ts = bars_5m[0]["time"]
+        run_end_ts = bars_5m[-1]["time"]
+    else:
+        run_start_ts = now_ist()
+        run_end_ts = run_start_ts
+
+    cash_flows: list[tuple[datetime, float]] = [(run_start_ts, -initial_capital)]
+    cash_flows.extend((ts, -amount) for ts, amount in refill_cash_flows)
+    cash_flows.append((run_end_ts, capital_available))
+
+    xirr = _compute_xirr(cash_flows)
+    cagr = _compute_cagr(
+        start_ts=run_start_ts,
+        end_ts=run_end_ts,
+        total_invested_capital=initial_capital + refill_amount,
+        ending_capital=capital_available,
+    )
+
     summary = _summarize_trades(
         trades,
         bars_5m,
@@ -458,6 +653,9 @@ async def _run_strategy_adapter_backtest(
         ending_capital=capital_available,
         refill_events=refill_events,
         refill_amount=refill_amount,
+        xirr=xirr,
+        cagr=cagr,
+        insufficient_funds_skips=insufficient_funds_skips,
     )
 
     started_at = now_ist().isoformat()
@@ -485,8 +683,12 @@ async def _run_strategy_adapter_backtest(
         f"pnl_model={summary['pnl_model']}",
         f"initial_capital={summary['initial_capital']}",
         f"ending_capital={summary['ending_capital']}",
+        f"total_invested_capital={summary['total_invested_capital']}",
         f"refill_events={summary['refill_events']}",
         f"refill_amount={summary['refill_amount']}",
+        f"insufficient_funds_skips={summary['insufficient_funds_skips']}",
+        f"xirr_pct={summary['xirr_pct']}",
+        f"cagr_pct={summary['cagr_pct']}",
     ]
     summary_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
 
@@ -495,7 +697,8 @@ async def _run_strategy_adapter_backtest(
         f"[{now_ist().isoformat()}] trading_days={summary['trading_days']} trades={summary['total_trades']} total_pnl={summary['total_pnl']}",
         f"[{now_ist().isoformat()}] max_profit={summary['max_profit']} max_loss={summary['max_loss']} min_profit={summary['min_profit']} min_loss={summary['min_loss']}",
         f"[{now_ist().isoformat()}] max_consecutive_loss_trades={summary['max_consecutive_loss_trades']} capital_model={summary['capital_model']} pnl_model={summary['pnl_model']}",
-        f"[{now_ist().isoformat()}] initial_capital={summary['initial_capital']} ending_capital={summary['ending_capital']} refill_events={summary['refill_events']} refill_amount={summary['refill_amount']}",
+        f"[{now_ist().isoformat()}] initial_capital={summary['initial_capital']} ending_capital={summary['ending_capital']} total_invested_capital={summary['total_invested_capital']} refill_events={summary['refill_events']} refill_amount={summary['refill_amount']} insufficient_funds_skips={summary['insufficient_funds_skips']}",
+        f"[{now_ist().isoformat()}] xirr_pct={summary['xirr_pct']} cagr_pct={summary['cagr_pct']}",
         f"[{now_ist().isoformat()}] journal={journal_path.as_posix()}",
         f"[{now_ist().isoformat()}] summary={summary_path.as_posix()}",
     ]
@@ -517,8 +720,12 @@ async def _run_strategy_adapter_backtest(
     print(f"  PnL model                  : {summary['pnl_model']}")
     print(f"  Initial capital            : Rs {summary['initial_capital']:,.2f}")
     print(f"  Ending capital             : Rs {summary['ending_capital']:,.2f}")
+    print(f"  Total invested capital     : Rs {summary['total_invested_capital']:,.2f}")
     print(f"  Refill events              : {summary['refill_events']}")
     print(f"  Refill amount              : Rs {summary['refill_amount']:,.2f}")
+    print(f"  Insufficient funds skips   : {summary['insufficient_funds_skips']}")
+    print(f"  XIRR                       : {summary['xirr_pct'] if summary['xirr_pct'] is not None else 'NA'}%")
+    print(f"  CAGR                       : {summary['cagr_pct'] if summary['cagr_pct'] is not None else 'NA'}%")
 
     return AdapterBacktestResult(
         trades=trades,

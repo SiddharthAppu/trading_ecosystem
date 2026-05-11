@@ -1,6 +1,6 @@
 # Astra User Guide (Standalone Desktop, Paper Trading)
 
-Version: 2026-04-30
+Version: 2026-05-11
 Scope: Build and deploy Astra standalone kits; run paper trading with a live broker feed or historical replay; run offline backtests and parameter optimisation.
 
 ---
@@ -533,6 +533,31 @@ Prompts for start and end dates, then runs the backtest and prints a trade-by-tr
 .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -Mode optimize
 ```
 
+### Optimizer range config (JSON)
+
+By default, optimize mode loads parameter ranges from:
+
+```text
+config\strategy_optimize_ranges.json
+```
+
+You can pass a custom ranges file at launch:
+
+```powershell
+.\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -Mode optimize -OptimizerConfig "config\my_ranges.json"
+```
+
+`strategy_optimize_ranges.json` supports:
+- `mode: "range"` with `values: [...]` for parameters to sweep.
+- `mode: "fixed"` with `value: ...` for parameters kept constant.
+- `early_stop` settings to probe only the first portion of bars and skip full runs when probe trades are zero.
+
+Example fixed parameter:
+
+```json
+"ema_period": { "mode": "fixed", "value": 20 }
+```
+
 Show top 15 parameter combinations instead of default 10:
 
 ```powershell
@@ -579,7 +604,7 @@ Single backtest:
 Grid search optimisation:
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\strategy_optimize.py --from 2026-04-01 --to 2026-04-28 --top 10
+.\.venv\Scripts\python.exe .\scripts\strategy_optimize.py --from 2026-04-01 --to 2026-04-28 --top 10 --optimizer-config config\strategy_optimize_ranges.json
 ```
 
 Custom symbol:
@@ -609,9 +634,24 @@ The optimiser ranks parameter sets by net PnL. Useful parameters to tune:
 | MACD fast | `NIFTY_MACD_FAST` | 12 |
 | MACD slow | `NIFTY_MACD_SLOW` | 26 |
 | MACD signal | `NIFTY_MACD_SIGNAL` | 9 |
-| Premium target (Rs) | `NIFTY_PREMIUM_TARGET` | 200.0 |
+| Premium target (Rs) | `NIFTY_TARGET_PREMIUM` | 200.0 |
 | Premium tolerance (Rs) | `NIFTY_PREMIUM_TOLERANCE` | 30.0 |
-| Reward:risk ratio | `NIFTY_REWARD_RISK_RATIO` | 2.0 |
+| Stop loss premium pct | `NIFTY_STOP_LOSS_PREMIUM_PCT` | 0.5 |
+
+### Optimizer artifacts and HTML indexes
+
+Optimize runs write most outputs under:
+- `logs\strategy_runtime\` (probe and full `opt_*.jsonl` journals)
+- `logs\run_summaries\` (launcher run summaries)
+
+If present in kit root, open these helper pages:
+- `ARTIFACT_INDEX.html` - full artifact list with relative links
+- `ARTIFACT_INDEX_LATEST_RUN.html` - latest optimize run-focused list
+
+```powershell
+Start-Process .\ARTIFACT_INDEX.html
+Start-Process .\ARTIFACT_INDEX_LATEST_RUN.html
+```
 
 ---
 
@@ -745,38 +785,61 @@ Modes:
 - `non_compounding`: Trade size remains `STRATEGY_RUNTIME_LOT_QUANTITY` lots. In adapter backtest/optimize runs, capital is refilled to baseline after losses.
 - `compounding`: Trade size scales with available capital in lot increments.
 
+`Applies To` indicates where each key is operationally relevant. Multiple codes mean the key is used across those kits/contexts.
+
+Legend:
+- `RP` = Replay Kit
+- `BT` = Backtest Kit
+- `LK` = LiveKit
+- `Stra` = Strategy-specific parameter
+
 | Key | Description | Applies To | Example |
 |---|---|---|---|
-| `STRATEGY_RUNTIME_FEED_SOURCE` | `broker` or `replay_ws` | Both | `replay_ws` |
-| `STRATEGY_RUNTIME_PROVIDER` | Broker provider namespace | Both | `fyers` |
-| `STRATEGY_RUNTIME_SYMBOL` | Underlying symbol | Both | `NSE:NIFTY50-INDEX` |
-| `STRATEGY_RUNTIME_TIMEFRAME` | Bar timeframe | Both | `1m` |
-| `STRATEGY_RUNTIME_STRATEGY` | Strategy module name | Both | `nifty_trend_options` |
-| `STRATEGY_RUNTIME_LOT_QUANTITY` | Base lots per trade | Both | `1` |
-| `STRATEGY_RUNTIME_LOT_SIZE` | Units per lot for the instrument | Both | `75` |
-| `STRATEGY_RUNTIME_INITIAL_CAPITAL` | Starting capital (Rs) | Both | `100000` |
-| `STRATEGY_RUNTIME_CAPITAL_MODEL` | Position sizing capital mode | Both | `non_compounding` |
-| `STRATEGY_RUNTIME_MAX_POSITION_LOTS` | Maximum lots allowed | Both | `1` |
-| `STRATEGY_RUNTIME_STOP_LOSS_PCT` | Stop loss % (0.60 = 60%) | Both | `0.60` |
-| `STRATEGY_RUNTIME_REPLAY_WS_URL` | Replay engine WebSocket URL | Replay only | `ws://localhost:8765` |
-| `STRATEGY_RUNTIME_REPLAY_SPEED` | Replay speed multiplier | Replay only | `5` |
-| `STRATEGY_RUNTIME_REPLAY_START_TIME` | ISO8601 replay start | Replay only | `2026-04-15T09:15:00+05:30` |
-| `STRATEGY_RUNTIME_REPLAY_END_TIME` | ISO8601 replay end | Replay only | `2026-04-15T15:30:00+05:30` |
-| `STRATEGY_RUNTIME_REPLAY_DATA_TYPE` | Data type streamed by replay engine | Replay only | `ohlcv_1m` or `market_ticks` |
-| `STRATEGY_RUNTIME_INDICATOR_INPUT_MODE` | How indicators receive data | Replay only | `bars_1m` or `ticks` |
-| `TELEGRAM_ENABLED` | Enable Telegram alerts | Both | `false` |
-| `NIFTY_PREMIUM_TARGET` | Target option premium (Rs) | Strategy-specific | `200.0` |
-| `NIFTY_PREMIUM_TOLERANCE` | Premium tolerance window (Rs) | Strategy-specific | `30.0` |
-| `NIFTY_REWARD_RISK_RATIO` | Exit target as multiple of stop | Strategy-specific | `2.0` |
-| `NIFTY_EMA_PERIOD` | EMA period for trend | Strategy-specific | `20` |
-| `NIFTY_SMA_PERIOD` | SMA period for trend | Strategy-specific | `20` |
-| `NIFTY_MACD_FAST` | MACD fast EMA | Strategy-specific | `12` |
-| `NIFTY_MACD_SLOW` | MACD slow EMA | Strategy-specific | `26` |
-| `NIFTY_MACD_SIGNAL` | MACD signal line | Strategy-specific | `9` |
+| `STRATEGY_RUNTIME_FEED_SOURCE` | `broker` or `replay_ws` | `RP, LK` | `replay_ws` |
+| `STRATEGY_RUNTIME_PROVIDER` | Broker provider namespace | `RP, LK` | `fyers` |
+| `STRATEGY_RUNTIME_SYMBOL` | Underlying symbol | `RP, LK` | `NSE:NIFTY50-INDEX` |
+| `STRATEGY_RUNTIME_TIMEFRAME` | Bar timeframe | `RP, BT, LK` | `1m` |
+| `STRATEGY_RUNTIME_STRATEGY` | Strategy module name | `RP, BT, LK` | `nifty_trend_options` |
+| `STRATEGY_RUNTIME_LOT_QUANTITY` | Base lots per trade; set `-1` for auto-lot mode | `RP, BT, LK` | `1` |
+| `STRATEGY_RUNTIME_LOT_SIZE` | Units per lot for the instrument | `RP, BT, LK` | `75` |
+| `STRATEGY_RUNTIME_INITIAL_CAPITAL` | Starting capital (Rs) | `RP, BT, LK` | `100000` |
+| `STRATEGY_RUNTIME_CAPITAL_MODEL` | Position sizing capital mode | `RP, BT, LK` | `non_compounding` |
+| `STRATEGY_RUNTIME_MAX_POSITION_LOTS` | Maximum lots allowed | `RP, LK` | `1` |
+| `STRATEGY_RUNTIME_STOP_LOSS_PCT` | Stop loss % (0.60 = 60%) | `RP, LK` | `0.60` |
+| `STRATEGY_RUNTIME_REPLAY_WS_URL` | Replay engine WebSocket URL | `RP, LK` | `ws://localhost:8765` |
+| `STRATEGY_RUNTIME_REPLAY_SPEED` | Replay speed multiplier | `RP, LK` | `5` |
+| `STRATEGY_RUNTIME_REPLAY_START_TIME` | ISO8601 replay start | `RP, LK` | `2026-04-15T09:15:00+05:30` |
+| `STRATEGY_RUNTIME_REPLAY_END_TIME` | ISO8601 replay end | `RP, LK` | `2026-04-15T15:30:00+05:30` |
+| `STRATEGY_RUNTIME_REPLAY_DATA_TYPE` | Data type streamed by replay engine | `RP, LK` | `ohlcv_1m` or `market_ticks` |
+| `STRATEGY_RUNTIME_INDICATOR_INPUT_MODE` | How indicators receive data | `RP, LK` | `bars_1m` or `ticks` |
+| `TELEGRAM_ENABLED` | Enable Telegram alerts | `RP, LK` | `false` |
+| `NIFTY_PREMIUM_TARGET` | Target option premium (Rs) | `RP, BT, LK, Stra` | `200.0` |
+| `NIFTY_PREMIUM_TOLERANCE` | Premium tolerance window (Rs) | `RP, BT, LK, Stra` | `30.0` |
+| `NIFTY_REWARD_RISK_RATIO` | Exit target as multiple of stop | `RP, BT, LK, Stra` | `2.0` |
+| `NIFTY_EMA_PERIOD` | EMA period for trend | `RP, BT, LK, Stra` | `20` |
+| `NIFTY_SMA_PERIOD` | SMA period for trend | `RP, BT, LK, Stra` | `20` |
+| `NIFTY_MACD_FAST` | MACD fast EMA | `RP, BT, LK, Stra` | `12` |
+| `NIFTY_MACD_SLOW` | MACD slow EMA | `RP, BT, LK, Stra` | `26` |
+| `NIFTY_MACD_SIGNAL` | MACD signal line | `RP, BT, LK, Stra` | `9` |
 
 Capital + refill behavior in adapter backtest/optimize mode:
 - `non_compounding`: uses configured lot quantity; when capital dips below initial capital after a closed trade, runtime emits `INITIAL_CAPITAL_REFILL` and tops capital back to baseline.
 - `compounding`: lot quantity scales with available capital; refill occurs only if capital falls to or below zero, allowing continuity of simulation runs.
+- **Auto-lot mode** (`STRATEGY_RUNTIME_LOT_QUANTITY=-1`): applies to both capital models. Each bar, effective lots = `floor(capital_available / (bar.close × lot_size))`, minimum 1. Overrides any fixed lot quantity.
+- **Insufficient funds**: this skip check is applied in auto-lot mode (`STRATEGY_RUNTIME_LOT_QUANTITY=-1`). If capital cannot fund even one lot at bar close price and no position is open, the bar is skipped and an `INSUFFICIENT_FUNDS_SKIP` event is written to the journal. The run continues to subsequent bars. Summary output includes `insufficient_funds_skips` count.
+
+### Maintenance reference — files to sync when config keys change
+
+When adding or renaming a strategy runtime config key, update all of the following:
+
+| File | Role |
+|---|---|
+| `services/strategy_runtime/config.py` | Canonical env key loader |
+| `scripts/strategy_backtest.py` | CLI flag → strategy_params mapping |
+| `scripts/strategy_optimize.py` | CLI flag → strategy_params mapping |
+| `scripts/START_BACKTEST_KIT.ps1` | Backtest kit launcher defaults |
+| `config/strategy_runtime.backtest_example.env` | Backtest sample config template |
+| `Astra_UserGuide.md` Section 12 table | Applicability reference |
 
 ### config/.env — global credentials
 
@@ -1005,4 +1068,4 @@ Yes. The refactored backtest and optimizer use the strategy-runtime offline adap
 ---
 
 Owner: Astra runtime track
-Last updated: 2026-05-08
+Last updated: 2026-05-11
