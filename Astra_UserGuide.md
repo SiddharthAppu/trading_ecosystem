@@ -533,6 +533,26 @@ Prompts for start and end dates, then runs the backtest and prints a trade-by-tr
 .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -Mode optimize
 ```
 
+### Quick Start: Optimize + Open Artifacts
+
+Run optimization and then open the artifact index pages:
+
+```powershell
+# 1) Run optimize
+.\START_BACKTEST_KIT.ps1 -From 2020-01-01 -To 2026-05-07 -Mode optimize
+
+# 2) Open artifact pages
+Start-Process .\ARTIFACT_INDEX_LATEST_RUN.html
+Start-Process .\ARTIFACT_INDEX.html
+```
+
+If the HTML files are missing, generate them by rerunning the helper command/workflow used during your kit setup, or open artifact folders directly:
+
+```powershell
+ii .\logs\strategy_runtime
+ii .\logs\run_summaries
+```
+
 ### Optimizer range config (JSON)
 
 By default, optimize mode loads parameter ranges from:
