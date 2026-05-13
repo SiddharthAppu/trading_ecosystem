@@ -163,6 +163,7 @@ def run_backtest(
 
     return _run_strategy_adapter_mode(
         bars_5m=bars_5m,
+        bars_1m=rows_1m,
         from_date=from_date,
         to_date=to_date,
         strategy_name=strategy_name,
@@ -193,6 +194,7 @@ def run_backtest(
 def _run_strategy_adapter_mode(
     *,
     bars_5m: list[dict],
+    bars_1m: list[dict],
     from_date: str,
     to_date: str,
     strategy_name: str,
@@ -229,6 +231,7 @@ def _run_strategy_adapter_mode(
 
     adapter_result = run_strategy_adapter_backtest(
         bars_5m=bars_5m,
+        bars_1m=bars_1m,
         from_date=from_date,
         to_date=to_date,
         strategy_name=strategy_name,

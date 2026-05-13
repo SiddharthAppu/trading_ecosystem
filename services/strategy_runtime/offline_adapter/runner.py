@@ -229,6 +229,7 @@ def _summarize_trades(
 def run_strategy_adapter_backtest(
     *,
     bars_5m: list[dict[str, Any]],
+    bars_1m: list[dict[str, Any]] | None = None,
     from_date: str,
     to_date: str,
     strategy_name: str,
@@ -283,6 +284,7 @@ def run_strategy_adapter_backtest(
     return asyncio.run(
         _run_strategy_adapter_backtest(
             bars_5m=bars_5m,
+            bars_1m=bars_1m,
             from_date=from_date,
             to_date=to_date,
             strategy_name=strategy_name,
@@ -299,6 +301,7 @@ def run_strategy_adapter_backtest(
 async def _run_strategy_adapter_backtest(
     *,
     bars_5m: list[dict[str, Any]],
+    bars_1m: list[dict[str, Any]] | None,
     from_date: str,
     to_date: str,
     strategy_name: str,
@@ -392,14 +395,61 @@ async def _run_strategy_adapter_backtest(
     order_meta: dict[str, dict[str, Any]] = {}
     bars_history: list[Bar] = []
     current_bar: Bar | None = None
+    one_min_timestamps = sorted(
+        {
+            row_time
+            for row in (bars_1m or [])
+            if isinstance((row_time := row.get("time")), datetime)
+        }
+    )
+
+    async def _run_intrabar_exit_checks(start_ts: datetime, end_ts: datetime) -> None:
+        def _normalize_ts(ts: datetime) -> datetime:
+            return ts.replace(tzinfo=None) if ts.tzinfo is not None else ts
+
+        start_norm = _normalize_ts(start_ts)
+        end_norm = _normalize_ts(end_ts)
+        if start_norm >= end_norm:
+            return
+        option_symbol = getattr(strategy, "_option_symbol", None)
+        if option_symbol is None:
+            return
+        check_exit = getattr(strategy, "_check_exit", None)
+        if check_exit is None:
+            return
+
+        provider = str(ctx.get_param("provider", "paper"))
+        force_exit_enabled = ctx.get_param("force_exit_1500_enabled", False)
+        force_exit_time_ist = str(ctx.get_param("force_exit_time_ist", "15:00"))
+        force_exit_debug_enabled = ctx.get_param("force_exit_debug_enabled", False)
+        force_exit_debug_to_journal = ctx.get_param("force_exit_debug_to_journal", False)
+
+        for minute_ts in one_min_timestamps:
+            minute_norm = _normalize_ts(minute_ts)
+            if minute_norm <= start_norm or minute_norm >= end_norm:
+                continue
+            if getattr(strategy, "_option_symbol", None) is None:
+                break
+            await check_exit(
+                provider,
+                as_of_time=minute_ts,
+                force_exit_enabled=force_exit_enabled,
+                force_exit_time_ist=force_exit_time_ist,
+                force_exit_debug_enabled=force_exit_debug_enabled,
+                force_exit_debug_to_journal=force_exit_debug_to_journal,
+            )
 
     async def _on_signal(event: SignalEvent) -> None:
         if event.indicator == "force_exit_debug" and isinstance(event.value, dict):
+            _debug_event_ts = event.value.get("as_of_time")
+            if _debug_event_ts is not None and not isinstance(_debug_event_ts, str):
+                _debug_event_ts = str(_debug_event_ts)
             await journal.log_event(
                 "FORCE_EXIT_DEBUG",
                 event.symbol,
                 event.value,
                 basket_id=event.basket_id,
+                event_ts=_debug_event_ts or None,
             )
             return
         await journal.log_indicator_signal(
@@ -590,7 +640,7 @@ async def _run_strategy_adapter_backtest(
     event_bus.subscribe(EventType.FILL, _on_fill)
 
     try:
-        for row in rows:
+        for idx, row in enumerate(rows):
             bar = Bar(
                 symbol=symbol,
                 timestamp=row["time"],
@@ -661,6 +711,11 @@ async def _run_strategy_adapter_backtest(
                 await strategy.evaluate_snapshot(snapshot)
             else:
                 await strategy.on_bar(bar)
+
+            if idx + 1 < len(rows):
+                next_bar_ts = rows[idx + 1]["time"]
+                if isinstance(next_bar_ts, datetime):
+                    await _run_intrabar_exit_checks(bar.timestamp, next_bar_ts)
 
         if current_bar is not None and open_entries:
             for open_symbol, entry in list(open_entries.items()):

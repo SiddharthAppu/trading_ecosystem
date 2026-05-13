@@ -676,12 +676,16 @@ class StrategyRuntime:
     async def _on_signal_event(self, event: Any) -> None:
         # Astra Signal Journaling
         if event.indicator == "force_exit_debug" and isinstance(event.value, dict):
+            _debug_event_ts = event.value.get("as_of_time")
+            if _debug_event_ts is not None and not isinstance(_debug_event_ts, str):
+                _debug_event_ts = str(_debug_event_ts)
             asyncio.create_task(
                 self.journal.log_event(
                     "FORCE_EXIT_DEBUG",
                     event.symbol,
                     event.value,
                     basket_id=event.basket_id,
+                    event_ts=_debug_event_ts or None,
                 )
             )
         else:
