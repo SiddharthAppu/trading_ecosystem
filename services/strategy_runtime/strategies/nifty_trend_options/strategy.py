@@ -22,10 +22,11 @@ The strategy calls get_adapter(provider) directly to fetch live option quotes.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import os
-from datetime import date
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
 from trading_core import get_adapter
@@ -58,8 +59,54 @@ def _log_decision(msg: str) -> None:
 
 
 def _ts() -> str:
-    from datetime import datetime, timezone
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _is_truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "t", "yes", "y", "on", "enabled"}:
+            return True
+        if normalized in {"0", "false", "f", "no", "n", "off", "disabled", ""}:
+            return False
+        return False
+    return bool(value)
+
+
+def _is_past_ist_cutoff(ts: datetime, cutoff_hhmm: str) -> bool:
+    cutoff = time(15, 0)
+    try:
+        hh_str, mm_str = str(cutoff_hhmm).strip().split(":", 1)
+        cutoff = time(int(hh_str), int(mm_str))
+    except (TypeError, ValueError):
+        cutoff = time(15, 0)
+
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=IST)
+    return ts.astimezone(IST).time() >= cutoff
+
+
+def _coerce_timestamp(value: object) -> datetime | None:
+    ts = value
+    if hasattr(ts, "to_pydatetime"):
+        ts = ts.to_pydatetime()
+    if isinstance(ts, str):
+        try:
+            ts = datetime.fromisoformat(ts)
+        except ValueError:
+            return None
+    if isinstance(ts, datetime):
+        return ts
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +120,8 @@ def _is_bullish(snapshot) -> bool:
     macd_val = snapshot.indicators.get("macd")  # MACD returns dict; runtime stores {"macd": v, "signal": s, "hist": h}
     if ema is None or sma is None:
         return False
-    macd_line = macd_val.get("macd", 0) if isinstance(macd_val, dict) else (macd_val or 0)
+    macd_line = macd_val.get("macd") if isinstance(macd_val, dict) else macd_val
+    macd_line = 0 if macd_line is None else macd_line
     return ema > sma and macd_line > 0
 
 
@@ -84,7 +132,8 @@ def _is_bearish(snapshot) -> bool:
     macd_val = snapshot.indicators.get("macd")
     if ema is None or sma is None:
         return False
-    macd_line = macd_val.get("macd", 0) if isinstance(macd_val, dict) else (macd_val or 0)
+    macd_line = macd_val.get("macd") if isinstance(macd_val, dict) else macd_val
+    macd_line = 0 if macd_line is None else macd_line
     return ema < sma and macd_line < 0
 
 
@@ -150,10 +199,21 @@ class StrategyImpl(Strategy):
         configured_expiry = self.ctx.get_param("option_expiry", "")
         resolver = getattr(self.ctx, "market_data_resolver", None)
         as_of_time = snapshot.bar.timestamp
+        force_exit_enabled = _is_truthy(self.ctx.get_param("force_exit_1500_enabled", False))
+        force_exit_time_ist = str(self.ctx.get_param("force_exit_time_ist", "15:00"))
+        force_exit_debug_enabled = _is_truthy(self.ctx.get_param("force_exit_debug_enabled", False))
+        force_exit_debug_to_journal = _is_truthy(self.ctx.get_param("force_exit_debug_to_journal", False))
 
         # --- 1. If we have an open option position, check exit first ---
         if self._option_symbol is not None:
-            await self._check_exit(provider, as_of_time)
+            await self._check_exit(
+                provider,
+                as_of_time,
+                force_exit_enabled=force_exit_enabled,
+                force_exit_time_ist=force_exit_time_ist,
+                force_exit_debug_enabled=force_exit_debug_enabled,
+                force_exit_debug_to_journal=force_exit_debug_to_journal,
+            )
             return
 
         # --- 2. No open position — check trend ---
@@ -272,7 +332,15 @@ class StrategyImpl(Strategy):
     # Exit check — called when we have an open position
     # ------------------------------------------------------------------
 
-    async def _check_exit(self, provider: str, as_of_time=None) -> None:
+    async def _check_exit(
+        self,
+        provider: str,
+        as_of_time=None,
+        force_exit_enabled: bool = False,
+        force_exit_time_ist: str = "15:00",
+        force_exit_debug_enabled: bool = False,
+        force_exit_debug_to_journal: bool = False,
+    ) -> None:
         if self._option_symbol is None:
             return
 
@@ -282,6 +350,14 @@ class StrategyImpl(Strategy):
             _log_decision(f"POSITION GONE externally for {self._option_symbol} — resetting state")
             self._reset_trade_state()
             return
+
+        cutoff_ts = _coerce_timestamp(as_of_time)
+
+        forced_time_due = (
+            force_exit_enabled
+            and isinstance(cutoff_ts, datetime)
+            and _is_past_ist_cutoff(cutoff_ts, force_exit_time_ist)
+        )
 
         # Fetch current price
         try:
@@ -296,23 +372,69 @@ class StrategyImpl(Strategy):
             _log_decision(f"ERROR fetching exit quote for {self._option_symbol}: {exc}")
             return
 
+        quote_available = current_price is not None
+        used_entry_price_fallback = False
         if current_price is None:
-            _log_decision(f"WARNING: No price for {self._option_symbol}, holding position")
-            return
+            if forced_time_due and self._entry_price is not None:
+                current_price = float(self._entry_price)
+                used_entry_price_fallback = True
+                _log_decision(
+                    f"WARNING: Missing quote at forced-exit cutoff; using entry price {current_price:.2f} for exit"
+                )
+            else:
+                _log_decision(f"WARNING: No price for {self._option_symbol}, holding position")
+                return
 
         should_exit = False
+        forced_time_exit = False
         reason = ""
 
-        if current_price >= self._target_price:
+        if forced_time_due:
+            should_exit = True
+            forced_time_exit = True
+            reason = f"FORCED TIME EXIT IST {force_exit_time_ist} current={current_price:.2f}"
+        elif current_price >= self._target_price:
             should_exit = True
             reason = f"TARGET HIT price={current_price:.2f} >= target={self._target_price:.2f}"
         elif current_price <= self._stop_price:
             should_exit = True
             reason = f"STOP HIT price={current_price:.2f} <= stop={self._stop_price:.2f}"
 
+        if force_exit_debug_enabled:
+            payload = {
+                "as_of_time": cutoff_ts.isoformat() if cutoff_ts else str(as_of_time),
+                "cutoff_time_ist": force_exit_time_ist,
+                "force_exit_enabled": force_exit_enabled,
+                "forced_time_due": forced_time_due,
+                "symbol": self._option_symbol,
+                "position_qty": int(position.quantity),
+                "quote_available": quote_available,
+                "used_entry_price_fallback": used_entry_price_fallback,
+                "current_price": float(current_price),
+                "target_price": float(self._target_price),
+                "stop_price": float(self._stop_price),
+                "should_exit": should_exit,
+                "exit_tag": "nto_time_exit" if forced_time_due else ("nto_exit" if should_exit else "hold"),
+                "reason": reason or "HOLD",
+            }
+            _log_decision(f"FORCE_EXIT_DEBUG {json.dumps(payload, separators=(',', ':'), default=str)}")
+            if force_exit_debug_to_journal:
+                await self.ctx.log_signal(
+                    self.ctx.get_param("underlying_symbol", self._option_symbol or "UNKNOWN"),
+                    "force_exit_debug",
+                    payload,
+                    {"force_exit_time_ist": force_exit_time_ist},
+                    "EVAL",
+                )
+
         if should_exit:
             _log_decision(f"EXIT → {reason} | entry={self._entry_price:.2f} pnl≈{current_price - self._entry_price:.2f}")
-            await self.ctx.sell(self._option_symbol, position.quantity, price=current_price, tag="nto_exit")
+            await self.ctx.sell(
+                self._option_symbol,
+                position.quantity,
+                price=current_price,
+                tag="nto_time_exit" if forced_time_exit else "nto_exit",
+            )
             self._reset_trade_state()
         else:
             _log_decision(

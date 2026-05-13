@@ -54,9 +54,9 @@ def _resolve_artifact_paths(*, mode: str, strategy_name: str, run_name: str | No
 
 def _trade_direction(symbol: str) -> str:
     symbol_up = symbol.upper()
-    if symbol_up.endswith("CE"):
+    if symbol_up.endswith("CE") or " CE " in symbol_up:
         return "CE"
-    if symbol_up.endswith("PE"):
+    if symbol_up.endswith("PE") or " PE " in symbol_up:
         return "PE"
     return "UNK"
 
@@ -394,6 +394,14 @@ async def _run_strategy_adapter_backtest(
     current_bar: Bar | None = None
 
     async def _on_signal(event: SignalEvent) -> None:
+        if event.indicator == "force_exit_debug" and isinstance(event.value, dict):
+            await journal.log_event(
+                "FORCE_EXIT_DEBUG",
+                event.symbol,
+                event.value,
+                basket_id=event.basket_id,
+            )
+            return
         await journal.log_indicator_signal(
             event.symbol,
             event.indicator,
@@ -413,10 +421,36 @@ async def _run_strategy_adapter_backtest(
         else:
             event_ts = now_ist().isoformat()
 
+        existing_entry = open_entries.get(order.symbol)
+        if order.side == Side.BUY:
+            trade_id = f"trd_{order.order_id}"
+        else:
+            trade_id = str(existing_entry.get("trade_id")) if existing_entry and existing_entry.get("trade_id") else f"trd_{order.order_id}"
+
         order_meta[order.order_id] = {
             "tag": order.tag,
             "basket_id": getattr(order, "basket_id", "none"),
+            "underlying_price": current_bar.close if current_bar else None,
+            "bar_timestamp": current_bar.timestamp if current_bar else None,
+            "trade_id": trade_id,
         }
+
+        if order.side == Side.BUY and current_bar is not None:
+            direction = _trade_direction(order.symbol)
+            decision = "BULLISH" if direction == "CE" else ("BEARISH" if direction == "PE" else "UNKNOWN")
+            await journal.log_entry_passed(
+                symbol=symbol,
+                entry_data={
+                    "price": float(current_bar.close),
+                    "decision": decision,
+                    "option_symbol": order.symbol,
+                    "option_price": float(order.price or 0.0),
+                    "order_id": order.order_id,
+                    "trade_id": trade_id,
+                },
+                basket_id=getattr(order, "basket_id", "none"),
+                event_ts=event_ts,
+            )
 
         await journal.log_order(
             order.symbol,
@@ -427,6 +461,7 @@ async def _run_strategy_adapter_backtest(
                 "price": order.price,
                 "tag": order.tag,
                 "status": "PLACED",
+                "trade_id": trade_id,
             },
             basket_id=getattr(order, "basket_id", "none"),
             event_ts=event_ts,
@@ -458,16 +493,24 @@ async def _run_strategy_adapter_backtest(
                 "quantity": fill.quantity,
                 "price": fill.price,
                 "filled_at": isoformat_ist(fill.filled_at),
+                "trade_id": meta.get("trade_id"),
             },
             basket_id=basket_id,
         )
 
         if fill.side == Side.BUY:
+            direction = _trade_direction(fill.symbol)
+            underlying_price = order_meta.get(fill.order_id, {}).get("underlying_price")
+            bar_timestamp = order_meta.get(fill.order_id, {}).get("bar_timestamp")
             open_entries[fill.symbol] = {
                 "entry_time": fill.filled_at,
                 "entry_price": fill.price,
                 "quantity": fill.quantity,
-                "direction": _trade_direction(fill.symbol),
+                "direction": direction,
+                "underlying_price_at_entry": underlying_price,
+                "bar_timestamp": bar_timestamp,
+                "order_id": fill.order_id,
+                "trade_id": meta.get("trade_id"),
             }
             return
 
@@ -479,18 +522,35 @@ async def _run_strategy_adapter_backtest(
         pnl = (fill.price - float(entry["entry_price"])) * qty
         capital_available = float(capital_available + pnl)
         exit_tag = str(meta.get("tag") or "EXIT").upper()
+        
+        # Calculate entry decision and price targets for charting
+        direction = entry["direction"]
+        entry_price = float(entry["entry_price"])
+        stop_loss_pct = float(strategy_params.get("stop_loss_premium_pct", 0.35))
+        risk = entry_price * stop_loss_pct
+        target_price = entry_price + (2 * risk)
+        stop_price = entry_price - risk
+        decision = "BULLISH" if direction == "CE" else "BEARISH"
+        
         trades.append(
             {
                 "entry_time": entry["entry_time"],
                 "exit_time": fill.filled_at,
-                "direction": entry["direction"],
+                "direction": direction,
                 "symbol": fill.symbol,
-                "entry_price": float(entry["entry_price"]),
+                "entry_price": entry_price,
                 "exit_price": float(fill.price),
                 "exit_reason": exit_tag,
                 "pnl": pnl,
                 "capital_before": capital_before,
                 "capital_after": float(capital_available),
+                # Entry decision data for ENTRY_PASSED logging
+                "underlying_price_at_entry": entry.get("underlying_price_at_entry"),
+                "bar_timestamp_at_entry": entry.get("bar_timestamp"),
+                "decision": decision,
+                "target_price": target_price,
+                "stop_price": stop_price,
+                "trade_id": entry.get("trade_id"),
             }
         )
 
@@ -513,6 +573,7 @@ async def _run_strategy_adapter_backtest(
                     "reason": "capital_refill",
                     "refill_amount": round(refill_topup, 2),
                     "triggered_by_order_id": fill.order_id,
+                    "trade_id": meta.get("trade_id"),
                 },
                 basket_id=basket_id,
                 event_ts=isoformat_ist(fill.filled_at),

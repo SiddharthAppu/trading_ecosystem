@@ -66,6 +66,22 @@ async def _write_journal(
         entry_ts = _to_ist_iso(trade.get("entry_time"))
         exit_ts = _to_ist_iso(trade.get("exit_time"))
 
+        # Log entry signal decision on the underlying symbol
+        underlying_price = trade.get("underlying_price_at_entry")
+        if underlying_price is not None:
+            await journal.log_entry_passed(
+                symbol=symbol,
+                entry_data={
+                    "price": underlying_price,
+                    "decision": trade.get("decision", "UNKNOWN"),
+                    "target_price": round(float(trade.get("target_price", 0)), 2),
+                    "stop_price": round(float(trade.get("stop_price", 0)), 2),
+                    "option_direction": trade.get("direction"),
+                    "order_id": entry_order_id,
+                },
+                event_ts=entry_ts,
+            )
+
         await journal.log_order(
             symbol=trade.get("symbol", symbol),
             order_data={

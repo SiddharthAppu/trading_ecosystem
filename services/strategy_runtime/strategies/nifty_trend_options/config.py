@@ -21,6 +21,12 @@ def get_default_params() -> dict:
         "premium_tolerance": float(os.getenv("NIFTY_PREMIUM_TOLERANCE", "50.0")),
         # Risk per trade as fraction of entry premium (e.g. 0.5 -> risk = 50% of entry)
         "stop_loss_premium_pct": float(os.getenv("NIFTY_STOP_LOSS_PREMIUM_PCT", "0.50")),
+        # Force-close open positions at/after the configured IST time.
+        "force_exit_1500_enabled": os.getenv("NIFTY_FORCE_EXIT_1500_ENABLED", "false"),
+        "force_exit_time_ist": os.getenv("NIFTY_FORCE_EXIT_TIME_IST", "15:00"),
+        # Debug instrumentation for force-exit evaluation.
+        "force_exit_debug_enabled": os.getenv("NIFTY_FORCE_EXIT_DEBUG_ENABLED", "false"),
+        "force_exit_debug_to_journal": os.getenv("NIFTY_FORCE_EXIT_DEBUG_TO_JOURNAL", "false"),
         # Provider to call for live option quotes (must match STRATEGY_RUNTIME_PROVIDER)
         "provider": os.getenv("STRATEGY_RUNTIME_PROVIDER", "upstox"),
         # Indicator periods

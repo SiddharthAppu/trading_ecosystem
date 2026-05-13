@@ -110,6 +110,10 @@ def run_backtest(
     target_premium: float = 200.0,
     premium_tolerance: float = 50.0,
     sl_pct: float = 0.5,
+    force_exit_1500_enabled: str = "false",
+    force_exit_time_ist: str = "15:00",
+    force_exit_debug_enabled: str = "false",
+    force_exit_debug_to_journal: str = "false",
     index_symbol: str = "NSE:NIFTY50-INDEX",
     lot_size: int = 75,
     lot_quantity: int = 1,
@@ -142,6 +146,10 @@ def run_backtest(
         print(f"  MACD                   : {macd_fast}/{macd_slow}/{macd_signal_period}")
         print(f"  Target premium         : {target_premium}  +/-{premium_tolerance}")
         print(f"  Stop loss pct          : {sl_pct*100:.0f}%  (options premium SL)")
+        print(f"  Force exit enabled     : {force_exit_1500_enabled}")
+        print(f"  Force exit time (IST)  : {force_exit_time_ist}")
+        print(f"  Force-exit debug       : {force_exit_debug_enabled}")
+        print(f"  Debug to journal       : {force_exit_debug_to_journal}")
         print(f"{'='*62}")
 
     rows_1m = _load_index_bars(conn, index_symbol, from_date, to_date)
@@ -168,6 +176,10 @@ def run_backtest(
         target_premium=target_premium,
         premium_tolerance=premium_tolerance,
         sl_pct=sl_pct,
+        force_exit_1500_enabled=force_exit_1500_enabled,
+        force_exit_time_ist=force_exit_time_ist,
+        force_exit_debug_enabled=force_exit_debug_enabled,
+        force_exit_debug_to_journal=force_exit_debug_to_journal,
         lot_size=lot_size,
         lot_quantity=lot_quantity,
         initial_capital=initial_capital,
@@ -194,6 +206,10 @@ def _run_strategy_adapter_mode(
     target_premium: float,
     premium_tolerance: float,
     sl_pct: float,
+    force_exit_1500_enabled: str,
+    force_exit_time_ist: str,
+    force_exit_debug_enabled: str,
+    force_exit_debug_to_journal: str,
     lot_size: int,
     lot_quantity: int,
     initial_capital: float,
@@ -229,6 +245,10 @@ def _run_strategy_adapter_mode(
             "target_premium": target_premium,
             "premium_tolerance": premium_tolerance,
             "stop_loss_premium_pct": sl_pct,
+            "force_exit_1500_enabled": force_exit_1500_enabled,
+            "force_exit_time_ist": force_exit_time_ist,
+            "force_exit_debug_enabled": force_exit_debug_enabled,
+            "force_exit_debug_to_journal": force_exit_debug_to_journal,
             "strike_scan_count": 10,
             "ema_period": ema_period,
             "sma_period": sma_period,
@@ -266,6 +286,26 @@ def main() -> None:
         type=float,
         default=0.5,
         help="Stop-loss as fraction of entry premium (0.5 = 50%%)",
+    )
+    parser.add_argument(
+        "--force-exit-1500-enabled",
+        default=os.getenv("NIFTY_FORCE_EXIT_1500_ENABLED", "false"),
+        help="Enable forced exit at/after configured IST time (true/false).",
+    )
+    parser.add_argument(
+        "--force-exit-time-ist",
+        default=os.getenv("NIFTY_FORCE_EXIT_TIME_IST", "15:00"),
+        help="Forced exit cutoff in IST (HH:MM).",
+    )
+    parser.add_argument(
+        "--force-exit-debug-enabled",
+        default=os.getenv("NIFTY_FORCE_EXIT_DEBUG_ENABLED", "false"),
+        help="Enable forced-exit debug instrumentation (true/false).",
+    )
+    parser.add_argument(
+        "--force-exit-debug-to-journal",
+        default=os.getenv("NIFTY_FORCE_EXIT_DEBUG_TO_JOURNAL", "false"),
+        help="Emit forced-exit debug payloads to JSONL journal (true/false).",
     )
     parser.add_argument("--lot-size", type=int, default=75)
     parser.add_argument("--lot-quantity", type=int, default=1)
@@ -323,6 +363,10 @@ def main() -> None:
             target_premium=args.target_premium,
             premium_tolerance=args.premium_tolerance,
             sl_pct=args.sl_pct,
+            force_exit_1500_enabled=args.force_exit_1500_enabled,
+            force_exit_time_ist=args.force_exit_time_ist,
+            force_exit_debug_enabled=args.force_exit_debug_enabled,
+            force_exit_debug_to_journal=args.force_exit_debug_to_journal,
             lot_size=args.lot_size,
             lot_quantity=args.lot_quantity,
             initial_capital=args.initial_capital,

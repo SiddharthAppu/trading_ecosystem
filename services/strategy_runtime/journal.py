@@ -119,6 +119,33 @@ class JournalManager:
             "action": action
         }, basket_id=basket_id, capital_context=capital_context)
 
+    async def log_entry_passed(
+        self,
+        symbol: str,
+        entry_data: Dict[str, Any],
+        basket_id: str = "none",
+        event_ts: str | None = None,
+        capital_context: Dict[str, Any] | None = None,
+    ):
+        """Log entry signal decision before order placement.
+        Used for charting entry decisions on the underlying symbol.
+        
+        entry_data should contain:
+        - price: underlying price at entry time
+        - decision: "BULLISH" or "BEARISH"
+        - target_price: target exit price
+        - stop_price: stop-loss exit price
+        - reason: optional reasoning string (e.g., "EMA > SMA + MACD > 0")
+        """
+        await self.log_event(
+            "ENTRY_PASSED",
+            symbol,
+            entry_data,
+            basket_id=basket_id,
+            event_ts=event_ts,
+            capital_context=capital_context,
+        )
+
     async def log_order(
         self,
         symbol: str,

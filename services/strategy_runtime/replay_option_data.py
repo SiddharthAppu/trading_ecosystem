@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from datetime import date
 from statistics import median
 from typing import Any
 
@@ -84,8 +85,14 @@ class ReplayOptionDataResolver:
         """
 
         pool = await self._pool()
+        expiry_param: date | str = expiry_date
+        if isinstance(expiry_date, str):
+            try:
+                expiry_param = datetime.fromisoformat(expiry_date).date()
+            except ValueError:
+                expiry_param = expiry_date
         async with pool.acquire() as conn:
-            rows = await conn.fetch(sql, as_of_time, expiry_date)
+            rows = await conn.fetch(sql, as_of_time, expiry_param)
 
         if not rows:
             return {"atm": 0.0, "spot": 0.0, "symbols": [], "contracts": []}

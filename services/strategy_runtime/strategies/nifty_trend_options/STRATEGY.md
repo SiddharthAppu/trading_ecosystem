@@ -34,17 +34,29 @@ Once a direction is confirmed:
 3. Select the strike whose current premium is closest to `NIFTY_TARGET_PREMIUM` **and** falls within `±NIFTY_PREMIUM_TOLERANCE`.
 4. If no strike qualifies, the trade is skipped for that bar.
 
+Selection rule:
+
+`abs(option_premium - NIFTY_TARGET_PREMIUM) <= NIFTY_PREMIUM_TOLERANCE`
+
 ### Exit
 
 Checked on every subsequent 5-minute bar while in position:
 
 | Condition                                        | Action         |
 | :----------------------------------------------- | :------------- |
+| IST time ≥ configured force-exit cutoff (optional) | Exit at market (TIME_EXIT, tag: `nto_time_exit`) |
 | Current price ≥ `entry + 2 × risk`               | Exit at profit (TARGET) |
 | Current price ≤ `entry − risk`                   | Exit at stop (STOP)     |
 | Position disappears from portfolio (broker stop)  | Reset state    |
 
 Where `risk = entry_premium × NIFTY_STOP_LOSS_PREMIUM_PCT`.
+
+Exit evaluation order when a position is open:
+1. Forced time exit (only if enabled)
+2. Target check
+3. Stop check
+
+This means a bar at/after the cutoff time exits immediately regardless of current PnL.
 
 **Risk-reward ratio is always 2 : 1** — every target is exactly 2× the stop distance.
 
@@ -60,6 +72,10 @@ All parameters are read from environment variables. Copy `strategy.env.example` 
 | `NIFTY_PREMIUM_TOLERANCE`        | 50      | Accept strikes within ±tolerance of target (₹) |
 | `NIFTY_STOP_LOSS_PREMIUM_PCT`    | 0.50    | Risk per trade as fraction of entry premium (50%) |
 | `NIFTY_STRIKE_SCAN_COUNT`        | 10      | Strikes to scan in each direction from ATM |
+| `NIFTY_FORCE_EXIT_1500_ENABLED`  | false   | Enable forced exit of open position at/after configured IST time |
+| `NIFTY_FORCE_EXIT_TIME_IST`      | 15:00   | IST time cutoff for forced exit (format `HH:MM`) |
+| `NIFTY_FORCE_EXIT_DEBUG_ENABLED` | false   | Emit one forced-exit debug line per open-position bar into the decision log |
+| `NIFTY_FORCE_EXIT_DEBUG_TO_JOURNAL` | false | Also emit structured forced-exit debug payloads into JSONL (`FORCE_EXIT_DEBUG`) |
 | `NIFTY_OPTION_EXPIRY`            | _(blank)_ | ISO date "YYYY-MM-DD". Blank = nearest weekly |
 | `STRATEGY_RUNTIME_LOOKBACK_BARS` | 60      | Bars to load for indicator warmup |
 | `STRATEGY_RUNTIME_INDICATORS`    | `ema_20,sma_20,macd` | Indicators the runtime must compute |
@@ -108,6 +124,10 @@ Every signal decision is written to:
 ```
 logs/strategy_runtime/nifty_trend_decisions_YYYY-MM-DD.txt
 ```
+
+If `NIFTY_FORCE_EXIT_DEBUG_ENABLED=true`, each bar with an open position also writes a `FORCE_EXIT_DEBUG` payload with cutoff evaluation state (`as_of_time`, `forced_time_due`, quote/fallback status, computed action).
+
+If `NIFTY_FORCE_EXIT_DEBUG_TO_JOURNAL=true`, the same payload is emitted as a dedicated JSONL event `FORCE_EXIT_DEBUG`.
 
 ### Broker status
 ```
@@ -160,6 +180,10 @@ python scripts/strategy_backtest.py `
 --target-premium    float       Target option premium in ₹ (default 200)
 --premium-tolerance float       ±tolerance around target (default 50)
 --sl-pct            float       Stop as fraction of entry (default 0.5)
+--force-exit-1500-enabled str   Enable forced exit at/after cutoff (default env)
+--force-exit-time-ist   str     Forced exit IST cutoff (default env)
+--force-exit-debug-enabled str  Enable forced-exit debug instrumentation (default env)
+--force-exit-debug-to-journal str Emit forced-exit debug as FORCE_EXIT_DEBUG events (default env)
 --lot-size          int         Lot size for P&L (default 75)
 --index-symbol      str         Index symbol in DB (default NSE:NIFTY50-INDEX)
 --export-trades     FILE        Write all trades to CSV
