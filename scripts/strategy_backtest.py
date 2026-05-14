@@ -16,6 +16,7 @@ import os
 import sys
 from collections import defaultdict
 from datetime import datetime
+from urllib.parse import urlparse
 
 # ── DB ─────────────────────────────────────────────────────────────────────────
 try:
@@ -41,14 +42,19 @@ if not DATABASE_URL:
     sys.exit(1)
 
 
-# ── Aggregation 1m → 5m ────────────────────────────────────────────────────────
-
-def _strip_tz(t: datetime) -> datetime:
-    return t.replace(tzinfo=None) if getattr(t, "tzinfo", None) else t
+def _database_descriptor(db_url: str) -> str:
+    try:
+        parsed = urlparse(db_url)
+    except (TypeError, ValueError):
+        return "unknown"
+    host = parsed.hostname or "unknown-host"
+    db_name = (parsed.path or "/").lstrip("/") or "unknown-db"
+    return f"{host}/{db_name}"
 
 
 def _floor_5m(t: datetime) -> datetime:
-    t = _strip_tz(t)
+    # Preserve the original timezone so replay lookups stay anchored to the
+    # exact instant represented by the source 1m bar.
     return t.replace(minute=(t.minute // 5) * 5, second=0, microsecond=0)
 
 
@@ -187,6 +193,7 @@ def run_backtest(
         capital_model=capital_model,
         log_file=log_file,
         run_name=run_name,
+        adapter_mode="backtest",
         verbose=verbose,
     )
 
@@ -218,6 +225,7 @@ def _run_strategy_adapter_mode(
     capital_model: str,
     log_file: str,
     run_name: str,
+    adapter_mode: str,
     verbose: bool,
 ) -> dict:
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -258,6 +266,13 @@ def _run_strategy_adapter_mode(
             "macd_fast": macd_fast,
             "macd_slow": macd_slow,
             "macd_signal": macd_signal_period,
+            "source_mode": adapter_mode,
+            "source_db": _database_descriptor(DATABASE_URL),
+            "index_source_table": "master_broker.ohlcv_1m",
+            "options_source_table": os.getenv(
+                "STRATEGY_RUNTIME_REPLAY_OPTIONS_TABLE",
+                "master_broker.options_ohlc_1m_fromupstox",
+            ),
         },
         log_file=log_file,
         run_name=run_name or None,

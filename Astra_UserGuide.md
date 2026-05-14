@@ -934,12 +934,57 @@ $env:TRADINGVIEW_USE_DESKTOP_APP="true"
 python .\UtilTools\journal_event_linker.py `
   --journal .\logs\strategy_runtime\runtime_journal.jsonl `
   --output-md .\logs\strategy_runtime\journal_links.md `
-  --output-json .\logs\strategy_runtime\journal_links.json
+  --output-json .\logs\strategy_runtime\journal_links.json `
+  --output-sql .\logs\strategy_runtime\journal_links.audit.sql `
+  --price-tolerance 0.05
 ```
 
 **Generated Artifacts:**
 1.  `journal_links.md`: An interactive table with BUY/SELL sides and deep-links.
 2.  `journal_links.pine`: A **Pine Script v6** indicator containing your trade coordinates.
+3.  `journal_links.audit.sql`: SQL audit script that compares journal prices against DB rows.
+
+### SQL Audit: Cross-Verify Journal vs DB
+
+The generated SQL includes four audit sections:
+1.  **Option fill mismatch check** (mismatch-focused): compares `ORDER_FILL`/`FILL` prices to option `close` at-or-before `event_ts`.
+2.  **Option fill summary**: grouped counts (`MATCH`, `PRICE_MISMATCH`, `MISSING_DB_ROW`).
+3.  **Entry spot check (5m semantic)**: compares `ENTRY_PASSED` spot price to reconstructed 5m bucket close.
+4.  **Entry spot check (strict 1m)**: compares `ENTRY_PASSED` spot price to latest 1m row at-or-before `event_ts`.
+
+Use section 3 for backtest/replay semantic alignment; use section 4 for strict timestamp diagnostics.
+
+#### Run the generated SQL in Python
+
+```powershell
+python - <<'PY'
+import os
+import psycopg2
+from dotenv import load_dotenv
+
+load_dotenv('config/.env')
+sql = open(r'logs/strategy_runtime/journal_links.audit.sql', encoding='utf-8').read()
+
+conn = psycopg2.connect(os.environ['DATABASE_URL'])
+try:
+    with conn.cursor() as cur:
+        cur.execute(sql)
+        # If your SQL client executes one statement at a time, run each section separately.
+finally:
+    conn.close()
+PY
+```
+
+#### Notes on data source metadata
+
+`RUNTIME_HEADER` now records source metadata used by the linker SQL header:
+- `source_mode` (`live`, `replay`, `backtest`, `optimize`)
+- `provider`
+- `source_db` (host/db name, masked credentials)
+- `index_source_table`
+- `options_source_table`
+
+This helps confirm whether a journal was produced from live feed, replay feed, or offline backtest/optimize datasets.
 
 ### Visualising Trades in TradingView
 

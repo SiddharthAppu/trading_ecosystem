@@ -51,6 +51,10 @@ from strategy_backtest import _load_index_bars, _run_strategy_adapter_mode, aggr
 
 
 DEFAULT_OPTIMIZER_CONFIG = os.path.join(_config_dir, "strategy_optimize_ranges.json")
+FORCE_EXIT_1500_ENABLED = os.getenv("NIFTY_FORCE_EXIT_1500_ENABLED", "false")
+FORCE_EXIT_TIME_IST = os.getenv("NIFTY_FORCE_EXIT_TIME_IST", "15:00")
+FORCE_EXIT_DEBUG_ENABLED = os.getenv("NIFTY_FORCE_EXIT_DEBUG_ENABLED", "false")
+FORCE_EXIT_DEBUG_TO_JOURNAL = os.getenv("NIFTY_FORCE_EXIT_DEBUG_TO_JOURNAL", "false")
 PARAM_TYPES: dict[str, type] = {
     "ema_period": int,
     "sma_period": int,
@@ -269,6 +273,7 @@ def main() -> None:
                 if optimizer["early_stop_enabled"] and probe_bars_count < total_bars:
                     probe_result = _run_strategy_adapter_mode(
                         bars_5m=bars_5m[:probe_bars_count],
+                        bars_1m=rows_1m,
                         from_date=args.from_date,
                         to_date=args.to_date,
                         strategy_name=args.strategy_name,
@@ -282,12 +287,17 @@ def main() -> None:
                         target_premium=float(params["target_premium"]),
                         premium_tolerance=float(params["premium_tolerance"]),
                         sl_pct=float(params["sl_pct"]),
+                        force_exit_1500_enabled=FORCE_EXIT_1500_ENABLED,
+                        force_exit_time_ist=FORCE_EXIT_TIME_IST,
+                        force_exit_debug_enabled=FORCE_EXIT_DEBUG_ENABLED,
+                        force_exit_debug_to_journal=FORCE_EXIT_DEBUG_TO_JOURNAL,
                         lot_size=args.lot_size,
                         lot_quantity=args.lot_quantity,
                         initial_capital=args.initial_capital,
                         capital_model=args.capital_model,
                         log_file=args.log_file,
                         run_name=f"{args.run_name_prefix}_{idx:04d}_probe",
+                        adapter_mode="optimize",
                         verbose=False,
                     )
                     if probe_result.get("summary", {}).get("total_trades", 0) == 0:
@@ -301,6 +311,7 @@ def main() -> None:
                 combos_executed_full += 1
                 result = _run_strategy_adapter_mode(
                     bars_5m=bars_5m,
+                    bars_1m=rows_1m,
                     from_date=args.from_date,
                     to_date=args.to_date,
                     strategy_name=args.strategy_name,
@@ -314,12 +325,17 @@ def main() -> None:
                     target_premium=float(params["target_premium"]),
                     premium_tolerance=float(params["premium_tolerance"]),
                     sl_pct=float(params["sl_pct"]),
+                    force_exit_1500_enabled=FORCE_EXIT_1500_ENABLED,
+                    force_exit_time_ist=FORCE_EXIT_TIME_IST,
+                    force_exit_debug_enabled=FORCE_EXIT_DEBUG_ENABLED,
+                    force_exit_debug_to_journal=FORCE_EXIT_DEBUG_TO_JOURNAL,
                     lot_size=args.lot_size,
                     lot_quantity=args.lot_quantity,
                     initial_capital=args.initial_capital,
                     capital_model=args.capital_model,
                     log_file=args.log_file,
                     run_name=f"{args.run_name_prefix}_{idx:04d}",
+                    adapter_mode="optimize",
                     verbose=False,
                 )
                 summary = result["summary"]

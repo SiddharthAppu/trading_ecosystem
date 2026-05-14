@@ -203,6 +203,8 @@ class StrategyImpl(Strategy):
         force_exit_time_ist = str(self.ctx.get_param("force_exit_time_ist", "15:00"))
         force_exit_debug_enabled = _is_truthy(self.ctx.get_param("force_exit_debug_enabled", False))
         force_exit_debug_to_journal = _is_truthy(self.ctx.get_param("force_exit_debug_to_journal", False))
+        entry_start_time_ist = str(self.ctx.get_param("entry_start_time_ist", "09:30"))
+        entry_end_time_ist = str(self.ctx.get_param("entry_end_time_ist", "15:00"))
 
         # --- 1. If we have an open option position, check exit first ---
         if self._option_symbol is not None:
@@ -216,7 +218,29 @@ class StrategyImpl(Strategy):
             )
             return
 
-        # --- 2. No open position — check trend ---
+        # --- 2. No open position — enforce entry time window ---
+        bar_ist = _coerce_timestamp(as_of_time)
+        if bar_ist is not None:
+            bar_ist = bar_ist.astimezone(IST)
+            bar_time = bar_ist.time()
+            try:
+                hh, mm = entry_start_time_ist.strip().split(":", 1)
+                start_t = time(int(hh), int(mm))
+            except (ValueError, AttributeError):
+                start_t = time(9, 30)
+            try:
+                hh, mm = entry_end_time_ist.strip().split(":", 1)
+                end_t = time(int(hh), int(mm))
+            except (ValueError, AttributeError):
+                end_t = time(15, 0)
+            if not (start_t <= bar_time < end_t):
+                _log_decision(
+                    f"SKIP — outside entry window {entry_start_time_ist}–{entry_end_time_ist} IST "
+                    f"(bar={bar_ist.strftime('%H:%M')} IST)"
+                )
+                return
+
+        # --- 3. Check trend ---
         bullish = _is_bullish(snapshot)
         bearish = _is_bearish(snapshot)
 

@@ -21,6 +21,10 @@ def get_default_params() -> dict:
         "premium_tolerance": float(os.getenv("NIFTY_PREMIUM_TOLERANCE", "50.0")),
         # Risk per trade as fraction of entry premium (e.g. 0.5 -> risk = 50% of entry)
         "stop_loss_premium_pct": float(os.getenv("NIFTY_STOP_LOSS_PREMIUM_PCT", "0.50")),
+        # Entry time window (IST). New positions are only opened within [entry_start, entry_end).
+        # Set entry_start_time_ist and entry_end_time_ist to restrict intraday trading hours.
+        "entry_start_time_ist": os.getenv("NIFTY_ENTRY_START_TIME_IST", "09:30"),
+        "entry_end_time_ist": os.getenv("NIFTY_ENTRY_END_TIME_IST", "15:00"),
         # Force-close open positions at/after the configured IST time.
         "force_exit_1500_enabled": os.getenv("NIFTY_FORCE_EXIT_1500_ENABLED", "false"),
         "force_exit_time_ist": os.getenv("NIFTY_FORCE_EXIT_TIME_IST", "15:00"),

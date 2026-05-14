@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 from services.strategy_runtime.bootstrap import ensure_repo_paths
 
@@ -34,6 +36,16 @@ import websockets
 
 
 logger = logging.getLogger("strategy_runtime.runtime")
+
+
+def _database_descriptor(db_url: str) -> str:
+    try:
+        parsed = urlparse(db_url)
+    except (TypeError, ValueError):
+        return "unknown"
+    host = parsed.hostname or "unknown-host"
+    db_name = (parsed.path or "/").lstrip("/") or "unknown-db"
+    return f"{host}/{db_name}"
 
 
 def _timeframe_to_minutes(timeframe: str) -> int:
@@ -1049,11 +1061,44 @@ class StrategyRuntime:
         """Write a RUNTIME_HEADER event as the first entry of this run's journal."""
         s = self.settings
         strategy_params = load_strategy_params(s.strategy_name)
+        if s.feed_source == "broker":
+            source_mode = "live"
+            index_source_table = "live_stream"
+        elif s.feed_source == "replay_ws":
+            source_mode = "replay"
+            if s.replay_data_type == "ohlcv_1min_from_ticks":
+                index_source_table = f"broker_{s.provider}.ohlcv_1min_from_ticks"
+            elif s.replay_data_type == "market_ticks":
+                index_source_table = f"broker_{s.provider}.market_ticks"
+            else:
+                index_source_table = "master_broker.ohlcv_1m"
+        else:
+            source_mode = s.feed_source
+            index_source_table = "unknown"
+
+        source_payload = {
+            "source_mode": source_mode,
+            "feed_source": s.feed_source,
+            "provider": s.provider,
+            "trading_provider": self.trading_provider,
+            "source_db": _database_descriptor(os.getenv("DATABASE_URL", "")),
+            "index_source_table": index_source_table,
+            "options_source_table": os.getenv(
+                "STRATEGY_RUNTIME_REPLAY_OPTIONS_TABLE",
+                "master_broker.options_ohlc_1m_fromupstox",
+            ),
+            "replay_data_type": s.replay_data_type if s.feed_source == "replay_ws" else None,
+        }
         run_params = {
             "run_log_path": s.log_file,
             "feed_source": s.feed_source,
             "provider": s.provider,
             "trading_provider": self.trading_provider,
+            "source": source_payload,
+            "source_mode": source_payload["source_mode"],
+            "source_db": source_payload["source_db"],
+            "index_source_table": source_payload["index_source_table"],
+            "options_source_table": source_payload["options_source_table"],
             "symbol": s.symbol,
             "indicator_input_mode": s.indicator_input_mode,
             "lot_quantity": s.lot_quantity,

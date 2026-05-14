@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlparse
 
 from services.strategy_runtime.bootstrap import ensure_repo_paths
 
@@ -24,7 +26,7 @@ from services.strategy_runtime.offline_adapter.artifacts import _build_run_name
 from services.strategy_runtime.portfolio import PortfolioManager
 from services.strategy_runtime.replay_option_data import ReplayOptionDataResolver
 from services.strategy_runtime.strategies import load_strategy, load_strategy_params
-from services.strategy_runtime.time_utils import isoformat_ist, now_ist
+from services.strategy_runtime.time_utils import IST, isoformat_ist, now_ist
 
 
 @dataclass(slots=True)
@@ -37,11 +39,21 @@ class AdapterBacktestResult:
     summary_path: str
 
 
+def _repo_root() -> Path:
+    # runner.py -> offline_adapter -> strategy_runtime -> services -> <repo_root>
+    return Path(__file__).resolve().parents[3]
+
+
 def _resolve_artifact_paths(*, mode: str, strategy_name: str, run_name: str | None, log_file: str) -> tuple[str, Path, Path, Path]:
     resolved_run_name = _build_run_name(mode=mode, strategy_name=strategy_name, run_name=run_name)
     log_path = Path(log_file)
     if not log_path.is_absolute():
-        log_path = Path.cwd() / log_path
+        log_path = _repo_root() / log_path
+    # Keep explicit custom log-file names as-is, but make the default runtime.log
+    # run-specific so each backtest gets an isolated log artifact.
+    if log_path.name.lower() == "runtime.log":
+        log_path = log_path.with_name(f"{resolved_run_name}.log")
+    log_path = log_path.resolve()
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     summary_dir = log_path.parent.parent / "run_summaries"
@@ -67,8 +79,26 @@ def _append_lines(path: Path, lines: list[str]) -> None:
         handle.write("\n".join(lines) + "\n")
 
 
+def _database_descriptor(db_url: str) -> str:
+    try:
+        parsed = urlparse(db_url)
+    except (TypeError, ValueError):
+        return "unknown"
+    host = parsed.hostname or "unknown-host"
+    db_name = (parsed.path or "/").lstrip("/") or "unknown-db"
+    return f"{host}/{db_name}"
+
+
+def _to_ist(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=IST)
+    return value.astimezone(IST)
+
+
 def _year_fraction(start: datetime, end: datetime) -> float:
-    return max((end - start).total_seconds() / (365.25 * 24 * 3600), 1e-9)
+    start_ist = _to_ist(start)
+    end_ist = _to_ist(end)
+    return max((end_ist - start_ist).total_seconds() / (365.25 * 24 * 3600), 1e-9)
 
 
 def _parse_iso_date(date_value: str) -> datetime | None:
@@ -81,22 +111,23 @@ def _parse_iso_date(date_value: str) -> datetime | None:
 def _compute_xirr(cash_flows: list[tuple[datetime, float]]) -> float | None:
     if len(cash_flows) < 2:
         return None
+    normalized_cash_flows = [(_to_ist(ts), float(amount)) for ts, amount in cash_flows]
     amounts = [float(amount) for _, amount in cash_flows]
     if not any(amount < 0 for amount in amounts) or not any(amount > 0 for amount in amounts):
         return None
 
-    t0 = min(ts for ts, _ in cash_flows)
+    t0 = min(ts for ts, _ in normalized_cash_flows)
 
     def _npv(rate: float) -> float:
         total = 0.0
-        for ts, amount in cash_flows:
+        for ts, amount in normalized_cash_flows:
             years = _year_fraction(t0, ts)
             total += amount / ((1.0 + rate) ** years)
         return total
 
     def _d_npv(rate: float) -> float:
         total = 0.0
-        for ts, amount in cash_flows:
+        for ts, amount in normalized_cash_flows:
             years = _year_fraction(t0, ts)
             total += (-years * amount) / ((1.0 + rate) ** (years + 1.0))
         return total
@@ -346,6 +377,16 @@ async def _run_strategy_adapter_backtest(
         timeframe=timeframe,
         capital_context_provider=_journal_capital_context,
     )
+    source_payload = {
+        "source_mode": str(strategy_params.get("source_mode") or "backtest"),
+        "provider": str(strategy_params.get("provider") or "paper"),
+        "index_source_table": str(strategy_params.get("index_source_table") or "master_broker.ohlcv_1m"),
+        "options_source_table": str(
+            strategy_params.get("options_source_table")
+            or os.getenv("STRATEGY_RUNTIME_REPLAY_OPTIONS_TABLE", "master_broker.options_ohlc_1m_fromupstox")
+        ),
+        "source_db": str(strategy_params.get("source_db") or _database_descriptor(os.getenv("DATABASE_URL", ""))),
+    }
     await journal.log_run_header(
         symbol=symbol,
         strategy=strategy_name,
@@ -354,6 +395,11 @@ async def _run_strategy_adapter_backtest(
         run_params={
             **strategy_params,
             "mode": "backtest",
+            "source": source_payload,
+            "source_mode": source_payload["source_mode"],
+            "source_db": source_payload["source_db"],
+            "index_source_table": source_payload["index_source_table"],
+            "options_source_table": source_payload["options_source_table"],
             "from_date": from_date,
             "to_date": to_date,
             "run_log_path": log_path.as_posix(),
@@ -395,6 +441,7 @@ async def _run_strategy_adapter_backtest(
     order_meta: dict[str, dict[str, Any]] = {}
     bars_history: list[Bar] = []
     current_bar: Bar | None = None
+    last_intrabar_exit_minute: datetime | None = None  # Track intrabar exit trigger time
     one_min_timestamps = sorted(
         {
             row_time
@@ -404,6 +451,7 @@ async def _run_strategy_adapter_backtest(
     )
 
     async def _run_intrabar_exit_checks(start_ts: datetime, end_ts: datetime) -> None:
+        nonlocal last_intrabar_exit_minute
         def _normalize_ts(ts: datetime) -> datetime:
             return ts.replace(tzinfo=None) if ts.tzinfo is not None else ts
 
@@ -418,11 +466,18 @@ async def _run_strategy_adapter_backtest(
         if check_exit is None:
             return
 
+        def _is_truthy(v: object) -> bool:
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, str):
+                return v.strip().lower() in {"1", "true", "t", "yes", "y", "on", "enabled"}
+            return bool(v)
+
         provider = str(ctx.get_param("provider", "paper"))
-        force_exit_enabled = ctx.get_param("force_exit_1500_enabled", False)
+        force_exit_enabled = _is_truthy(ctx.get_param("force_exit_1500_enabled", False))
         force_exit_time_ist = str(ctx.get_param("force_exit_time_ist", "15:00"))
-        force_exit_debug_enabled = ctx.get_param("force_exit_debug_enabled", False)
-        force_exit_debug_to_journal = ctx.get_param("force_exit_debug_to_journal", False)
+        force_exit_debug_enabled = _is_truthy(ctx.get_param("force_exit_debug_enabled", False))
+        force_exit_debug_to_journal = _is_truthy(ctx.get_param("force_exit_debug_to_journal", False))
 
         for minute_ts in one_min_timestamps:
             minute_norm = _normalize_ts(minute_ts)
@@ -430,6 +485,8 @@ async def _run_strategy_adapter_backtest(
                 continue
             if getattr(strategy, "_option_symbol", None) is None:
                 break
+            # Set current intrabar minute before check_exit so _on_signal can capture it
+            last_intrabar_exit_minute = minute_ts
             await check_exit(
                 provider,
                 as_of_time=minute_ts,
@@ -462,12 +519,27 @@ async def _run_strategy_adapter_backtest(
         )
 
     async def _on_order(event: OrderEvent) -> None:
+        nonlocal last_intrabar_exit_minute
         order = event.order
         if current_bar is not None:
             if order.price is None:
                 order.price = current_bar.close
-            order.created_at = current_bar.timestamp
-            event_ts = isoformat_ist(current_bar.timestamp)
+            # Use intrabar exit timestamp for SELL orders, 5m bar timestamp for BUY orders
+            if order.side == Side.SELL and last_intrabar_exit_minute is not None:
+                # Normalize exit timestamp to match current_bar.timestamp timezone awareness
+                exit_ts = last_intrabar_exit_minute
+                if exit_ts.tzinfo is not None and current_bar.timestamp.tzinfo is None:
+                    # Remove timezone if current_bar is offset-naive
+                    exit_ts = exit_ts.replace(tzinfo=None)
+                elif exit_ts.tzinfo is None and current_bar.timestamp.tzinfo is not None:
+                    # Add timezone if current_bar is offset-aware (shouldn't happen, but be safe)
+                    exit_ts = exit_ts.replace(tzinfo=current_bar.timestamp.tzinfo)
+                order.created_at = exit_ts
+                event_ts = isoformat_ist(exit_ts)
+                last_intrabar_exit_minute = None  # Reset after use
+            else:
+                order.created_at = current_bar.timestamp
+                event_ts = isoformat_ist(current_bar.timestamp)
         else:
             event_ts = now_ist().isoformat()
 
