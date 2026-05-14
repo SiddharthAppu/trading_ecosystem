@@ -380,11 +380,10 @@ async def _run_strategy_adapter_backtest(
     source_payload = {
         "source_mode": str(strategy_params.get("source_mode") or "backtest"),
         "provider": str(strategy_params.get("provider") or "paper"),
-        "index_source_table": str(strategy_params.get("index_source_table") or "master_broker.ohlcv_1m"),
-        "options_source_table": str(
-            strategy_params.get("options_source_table")
-            or os.getenv("STRATEGY_RUNTIME_REPLAY_OPTIONS_TABLE", "master_broker.options_ohlc_1m_fromupstox")
-        ),
+        "index_source_table": str(strategy_params.get("index_source_table") or ""),
+        "options_source_table": str(strategy_params.get("options_source_table") or ""),
+        "source_data_kind": str(strategy_params.get("source_data_kind") or ""),
+        "db_chunking_trading_days": int(strategy_params.get("db_chunking_trading_days") or 0),
         "source_db": str(strategy_params.get("source_db") or _database_descriptor(os.getenv("DATABASE_URL", ""))),
     }
     await journal.log_run_header(

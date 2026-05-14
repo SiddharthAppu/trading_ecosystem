@@ -799,6 +799,21 @@ python .\scripts\lib\import_ticks_to_db.py --date 2026-05-06 --dir .\logs\ticks
 
 ## 12. Configuration Reference
 
+### Example config files index
+
+Comprehensive templates with extensive per-parameter descriptions:
+- `config\strategy_runtime.explicit_replay.full.env.example` - full replay/runtime template with explicit source contract and fail-fast chunking controls.
+- `config\strategy_runtime.explicit_live.full.env.example` - full live/broker runtime template with complete parameter vocabulary.
+- `config\strategy_backtest.explicit_full.env.example` - full backtest template with explicit source contract and chunking controls.
+
+Concrete defaults (Upstox-first) for quick start:
+- `config\strategy_runtime.upstox.replay_ticks.default.env.example` - replay using Upstox tick table (`broker_upstox.market_ticks`).
+- `config\strategy_runtime.upstox.replay_bars.default.env.example` - replay using Upstox bar table (`broker_upstox.ohlcv_1m`).
+
+Notes:
+- The concrete defaults use Upstox for provider, index symbol format, source tables, and options table.
+- For backtest, pair one of the above with `scripts\strategy_backtest.py --from <YYYY-MM-DD> --to <YYYY-MM-DD>` and adjust source table/data kind as needed.
+
 ### strategy_runtime.paper_replay.env — key applicability by capital mode
 
 Modes:

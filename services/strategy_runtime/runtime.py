@@ -1064,17 +1064,18 @@ class StrategyRuntime:
         if s.feed_source == "broker":
             source_mode = "live"
             index_source_table = "live_stream"
+            source_data_kind = "ticks"
+            options_source_table = s.options_source_table
         elif s.feed_source == "replay_ws":
             source_mode = "replay"
-            if s.replay_data_type == "ohlcv_1min_from_ticks":
-                index_source_table = f"broker_{s.provider}.ohlcv_1min_from_ticks"
-            elif s.replay_data_type == "market_ticks":
-                index_source_table = f"broker_{s.provider}.market_ticks"
-            else:
-                index_source_table = "master_broker.ohlcv_1m"
+            index_source_table = s.source_table
+            source_data_kind = s.source_data_kind
+            options_source_table = s.options_source_table
         else:
             source_mode = s.feed_source
             index_source_table = "unknown"
+            source_data_kind = ""
+            options_source_table = s.options_source_table
 
         source_payload = {
             "source_mode": source_mode,
@@ -1083,10 +1084,10 @@ class StrategyRuntime:
             "trading_provider": self.trading_provider,
             "source_db": _database_descriptor(os.getenv("DATABASE_URL", "")),
             "index_source_table": index_source_table,
-            "options_source_table": os.getenv(
-                "STRATEGY_RUNTIME_REPLAY_OPTIONS_TABLE",
-                "master_broker.options_ohlc_1m_fromupstox",
-            ),
+            "options_source_table": options_source_table,
+            "source_data_kind": source_data_kind,
+            "db_chunking_trading_days": s.db_chunking_trading_days,
+            "max_rows_per_chunk": s.max_rows_per_chunk,
             "replay_data_type": s.replay_data_type if s.feed_source == "replay_ws" else None,
         }
         run_params = {

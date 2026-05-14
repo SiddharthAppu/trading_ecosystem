@@ -6,6 +6,10 @@ from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 
+class RuntimeConfigError(ValueError):
+    """Raised when required runtime configuration is missing or invalid."""
+
+
 def _load_global_env() -> None:
     """Load central config/.env so shared secrets do not need per-strategy duplication."""
     config_dir = os.getenv("TRADING_CONFIG_DIR", os.path.join(os.getcwd(), "config"))
@@ -28,6 +32,33 @@ def _parse_indicator_input_mode(raw_value: str | None) -> str:
     if value in {"bars_1m", "ticks"}:
         return value
     return "bars_1m"
+
+
+def _require_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeConfigError(f"Missing required config: {name}")
+    return value
+
+
+def _parse_positive_int(name: str) -> int:
+    raw_value = _require_env(name)
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise RuntimeConfigError(f"Invalid integer for {name}: {raw_value}") from exc
+    if value <= 0:
+        raise RuntimeConfigError(f"{name} must be greater than 0")
+    return value
+
+
+def _normalize_source_data_kind(raw_value: str) -> str:
+    value = raw_value.strip().lower()
+    if value in {"bars", "ticks"}:
+        return value
+    raise RuntimeConfigError(
+        f"Invalid source data kind: {raw_value}. Expected one of: bars, ticks"
+    )
 
 
 @dataclass(slots=True)
@@ -62,6 +93,29 @@ class RuntimeSettings:
     replay_speed: float = 5.0
     replay_start_time: str = ""
     replay_end_time: str = ""
+    source_table: str = ""
+    source_data_kind: str = ""
+    options_source_table: str = ""
+    db_chunking_trading_days: int = 0
+    max_rows_per_chunk: int = 0
+
+    def validate_source_config(self) -> None:
+        if self.feed_source != "replay_ws":
+            return
+        if not self.source_table:
+            raise RuntimeConfigError("Missing required config: STRATEGY_RUNTIME_SOURCE_TABLE")
+        if not self.source_data_kind:
+            raise RuntimeConfigError("Missing required config: STRATEGY_RUNTIME_SOURCE_DATA_KIND")
+        if self.source_data_kind not in {"bars", "ticks"}:
+            raise RuntimeConfigError(
+                f"Invalid STRATEGY_RUNTIME_SOURCE_DATA_KIND: {self.source_data_kind}. Expected bars or ticks"
+            )
+        if self.db_chunking_trading_days <= 0:
+            raise RuntimeConfigError("STRATEGY_RUNTIME_DB_CHUNKING_TRADING_DAYS must be greater than 0")
+        if self.max_rows_per_chunk <= 0:
+            raise RuntimeConfigError("STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK must be greater than 0")
+        if not self.options_source_table:
+            raise RuntimeConfigError("Missing required config: STRATEGY_RUNTIME_OPTIONS_SOURCE_TABLE")
 
     @classmethod
     def from_env(cls) -> "RuntimeSettings":
@@ -69,7 +123,7 @@ class RuntimeSettings:
         if capital_model not in {"non_compounding", "compounding"}:
             capital_model = "non_compounding"
 
-        return cls(
+        settings = cls(
             feed_source=os.getenv("STRATEGY_RUNTIME_FEED_SOURCE", "broker").strip().lower(),
             provider=os.getenv("STRATEGY_RUNTIME_PROVIDER", "upstox").strip().lower(),
             trading_provider=os.getenv("STRATEGY_RUNTIME_TRADING_PROVIDER", "").strip().lower(),
@@ -105,4 +159,24 @@ class RuntimeSettings:
             replay_speed=float(os.getenv("STRATEGY_RUNTIME_REPLAY_SPEED", "5.0")),
             replay_start_time=os.getenv("STRATEGY_RUNTIME_REPLAY_START_TIME", "").strip(),
             replay_end_time=os.getenv("STRATEGY_RUNTIME_REPLAY_END_TIME", "").strip(),
+            source_table=os.getenv("STRATEGY_RUNTIME_SOURCE_TABLE", "").strip(),
+            source_data_kind=os.getenv("STRATEGY_RUNTIME_SOURCE_DATA_KIND", "").strip().lower(),
+            options_source_table=os.getenv("STRATEGY_RUNTIME_OPTIONS_SOURCE_TABLE", "").strip(),
+            db_chunking_trading_days=(
+                _parse_positive_int("STRATEGY_RUNTIME_DB_CHUNKING_TRADING_DAYS")
+                if os.getenv("STRATEGY_RUNTIME_FEED_SOURCE", "broker").strip().lower() == "replay_ws"
+                else int(os.getenv("STRATEGY_RUNTIME_DB_CHUNKING_TRADING_DAYS", "1") or "1")
+            ),
+            max_rows_per_chunk=(
+                _parse_positive_int("STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK")
+                if os.getenv("STRATEGY_RUNTIME_FEED_SOURCE", "broker").strip().lower() == "replay_ws"
+                else int(os.getenv("STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK", "1") or "1")
+            ),
         )
+        settings.source_data_kind = (
+            _normalize_source_data_kind(settings.source_data_kind)
+            if settings.source_data_kind
+            else settings.source_data_kind
+        )
+        settings.validate_source_config()
+        return settings
