@@ -266,6 +266,35 @@ $effectiveIndexSymbol = if ($Symbol -ne "") {
 } else {
     "NSE:NIFTY50-INDEX"
 }
+$effectiveSourceTable = Get-FirstEnvValue @("STRATEGY_RUNTIME_SOURCE_TABLE")
+if ([string]::IsNullOrWhiteSpace($effectiveSourceTable)) { $effectiveSourceTable = "master_broker.ohlcv_1m" }
+
+$effectiveSourceDataKind = Get-FirstEnvValue @("STRATEGY_RUNTIME_SOURCE_DATA_KIND")
+if ([string]::IsNullOrWhiteSpace($effectiveSourceDataKind)) { $effectiveSourceDataKind = "bars" }
+$effectiveSourceDataKind = $effectiveSourceDataKind.Trim().ToLowerInvariant()
+if ($effectiveSourceDataKind -ne "bars" -and $effectiveSourceDataKind -ne "ticks") {
+    Write-Host "[ERROR] STRATEGY_RUNTIME_SOURCE_DATA_KIND must be bars or ticks; got '$effectiveSourceDataKind'" -ForegroundColor Red
+    exit 1
+}
+
+$effectiveOptionsTable = Get-FirstEnvValue @("STRATEGY_RUNTIME_OPTIONS_SOURCE_TABLE")
+if ([string]::IsNullOrWhiteSpace($effectiveOptionsTable)) { $effectiveOptionsTable = "master_broker.options_ohlc_1m_fromupstox" }
+
+$chunkingDaysRaw = Get-FirstEnvValue @("STRATEGY_RUNTIME_DB_CHUNKING_TRADING_DAYS")
+if ([string]::IsNullOrWhiteSpace($chunkingDaysRaw)) { $chunkingDaysRaw = "5" }
+$effectiveChunkingDays = Parse-IntOrExit -Value $chunkingDaysRaw -FieldName "STRATEGY_RUNTIME_DB_CHUNKING_TRADING_DAYS"
+if ($effectiveChunkingDays -le 0) {
+    Write-Host "[ERROR] STRATEGY_RUNTIME_DB_CHUNKING_TRADING_DAYS must be > 0" -ForegroundColor Red
+    exit 1
+}
+
+$maxRowsPerChunkRaw = Get-FirstEnvValue @("STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK")
+if ([string]::IsNullOrWhiteSpace($maxRowsPerChunkRaw)) { $maxRowsPerChunkRaw = "100000" }
+$effectiveMaxRowsPerChunk = Parse-IntOrExit -Value $maxRowsPerChunkRaw -FieldName "STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK"
+if ($effectiveMaxRowsPerChunk -le 0) {
+    Write-Host "[ERROR] STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK must be > 0" -ForegroundColor Red
+    exit 1
+}
 $strategyNameSource = if ($PSBoundParameters.ContainsKey("StrategyName") -and -not [string]::IsNullOrWhiteSpace($StrategyName)) {
     "CLI"
 } elseif (-not [string]::IsNullOrWhiteSpace($env:STRATEGY_RUNTIME_STRATEGY)) {
@@ -373,8 +402,9 @@ Write-Host "  Mode       : $Mode" -ForegroundColor White
 
 Write-Host ""
 Write-Host "[PREFLIGHT] Table snapshot" -ForegroundColor Cyan
-Write-Host "  Table      : master_broker.ohlcv_1m" -ForegroundColor White
-Write-Host "  Table      : master_broker.options_ohlc_1m_fromupstox" -ForegroundColor White
+Write-Host "  Source table : $effectiveSourceTable" -ForegroundColor White
+Write-Host "  Source kind  : $effectiveSourceDataKind" -ForegroundColor White
+Write-Host "  Options table: $effectiveOptionsTable" -ForegroundColor White
 
 $tableSnapshotScript = @'
 import json
@@ -382,6 +412,14 @@ import os
 import sys
 
 import psycopg2
+from psycopg2 import sql
+
+
+def _parts(name: str):
+    tokens = str(name or "").split(".", 1)
+    if len(tokens) != 2 or not tokens[0] or not tokens[1]:
+        raise ValueError(f"invalid table name: {name}")
+    return tokens[0], tokens[1]
 
 database_url = os.getenv("DATABASE_URL", "")
 if not database_url:
@@ -389,24 +427,44 @@ if not database_url:
     raise SystemExit(0)
 
 try:
+    symbol = sys.argv[1]
+    source_table = sys.argv[2]
+    options_table = sys.argv[3]
+    source_kind = sys.argv[4].strip().lower()
+    source_schema, source_rel = _parts(source_table)
+    options_schema, options_rel = _parts(options_table)
+
     conn = psycopg2.connect(database_url)
     cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT count(*), min(time), max(time)
-        FROM master_broker.ohlcv_1m
-        WHERE symbol = %s
-        """,
-        (sys.argv[1],),
-    )
+
+    if source_kind == "bars" and source_table == "master_broker.ohlcv_1m":
+        q = sql.SQL(
+            """
+            SELECT count(*), min(time), max(time)
+            FROM {}.{}
+            WHERE symbol = %s
+              AND master_close IS NOT NULL
+            """
+        ).format(sql.Identifier(source_schema), sql.Identifier(source_rel))
+    else:
+        q = sql.SQL(
+            """
+            SELECT count(*), min(time), max(time)
+            FROM {}.{}
+            WHERE symbol = %s
+            """
+        ).format(sql.Identifier(source_schema), sql.Identifier(source_rel))
+
+    cur.execute(q, (symbol,))
     index_count, index_min_time, index_max_time = cur.fetchone()
 
-    cur.execute(
+    q_opts = sql.SQL(
         """
         SELECT count(*), min(time), max(time)
-        FROM master_broker.options_ohlc_1m_fromupstox
+        FROM {}.{}
         """
-    )
+    ).format(sql.Identifier(options_schema), sql.Identifier(options_rel))
+    cur.execute(q_opts)
     options_count, options_min_time, options_max_time = cur.fetchone()
 
     cur.close()
@@ -429,7 +487,7 @@ except Exception as exc:
     print(json.dumps({"ok": False, "error": str(exc)}))
 '@
 
-$snapshotRaw = $tableSnapshotScript | & $PYTHON_EXE - $effectiveIndexSymbol 2>$null
+$snapshotRaw = $tableSnapshotScript | & $PYTHON_EXE - $effectiveIndexSymbol $effectiveSourceTable $effectiveOptionsTable $effectiveSourceDataKind 2>$null
 $snapshot = $null
 if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($snapshotRaw | Out-String))) {
     try {
@@ -466,12 +524,13 @@ $From = Normalize-DateInput -Value $From -FieldName "start"
 $To = Normalize-DateInput -Value $To -FieldName "end"
 
 # ── Preflight data availability check ─────────────────────────────────────────
-$indexTable = "master_broker.ohlcv_1m"
-$optionsTable = "master_broker.options_ohlc_1m_fromupstox"
+$indexTable = $effectiveSourceTable
+$optionsTable = $effectiveOptionsTable
 
 Write-Host "" 
 Write-Host "[PREFLIGHT] Backtest data source summary" -ForegroundColor Cyan
 Write-Host "  Index table   : $indexTable" -ForegroundColor White
+Write-Host "  Index kind    : $effectiveSourceDataKind" -ForegroundColor White
 Write-Host "  Options table : $optionsTable" -ForegroundColor White
 Write-Host "  Index symbol  : $effectiveIndexSymbol" -ForegroundColor White
 Write-Host "  Date range    : $From -> $To" -ForegroundColor White
@@ -482,10 +541,21 @@ import os
 import sys
 
 import psycopg2
+from psycopg2 import sql
+
+
+def _parts(name: str):
+    tokens = str(name or "").split(".", 1)
+    if len(tokens) != 2 or not tokens[0] or not tokens[1]:
+        raise ValueError(f"invalid table name: {name}")
+    return tokens[0], tokens[1]
 
 from_date = sys.argv[1]
 to_date = sys.argv[2]
 symbol = sys.argv[3]
+source_table = sys.argv[4]
+options_table = sys.argv[5]
+source_kind = sys.argv[6].strip().lower()
 
 database_url = os.getenv("DATABASE_URL", "")
 if not database_url:
@@ -493,32 +563,46 @@ if not database_url:
     raise SystemExit(0)
 
 try:
+        source_schema, source_rel = _parts(source_table)
+        options_schema, options_rel = _parts(options_table)
+
     conn = psycopg2.connect(database_url)
     cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT count(*)
-        FROM master_broker.ohlcv_1m
-        WHERE symbol = %s
-          AND time >= %s::date
-          AND time < (%s::date + INTERVAL '1 day')
-          AND master_close IS NOT NULL
-        """,
-        (symbol, from_date, to_date),
-    )
+        if source_kind == "bars" and source_table == "master_broker.ohlcv_1m":
+                q = sql.SQL(
+                        """
+                        SELECT count(*)
+                        FROM {}.{}
+                        WHERE symbol = %s
+                            AND time >= %s::date
+                            AND time < (%s::date + INTERVAL '1 day')
+                            AND master_close IS NOT NULL
+                        """
+                ).format(sql.Identifier(source_schema), sql.Identifier(source_rel))
+        else:
+                q = sql.SQL(
+                        """
+                        SELECT count(*)
+                        FROM {}.{}
+                        WHERE symbol = %s
+                            AND time >= %s::date
+                            AND time < (%s::date + INTERVAL '1 day')
+                        """
+                ).format(sql.Identifier(source_schema), sql.Identifier(source_rel))
+        cur.execute(q, (symbol, from_date, to_date))
     index_count = int(cur.fetchone()[0])
 
-    cur.execute(
-        """
-        SELECT count(*)
-        FROM master_broker.options_ohlc_1m_fromupstox
-        WHERE time >= %s::date
-          AND time < (%s::date + INTERVAL '1 day')
-          AND close IS NOT NULL
-          AND close > 0
-        """,
-        (from_date, to_date),
-    )
+        q_opts = sql.SQL(
+                """
+                SELECT count(*)
+                FROM {}.{}
+                WHERE time >= %s::date
+                    AND time < (%s::date + INTERVAL '1 day')
+                    AND close IS NOT NULL
+                    AND close > 0
+                """
+        ).format(sql.Identifier(options_schema), sql.Identifier(options_rel))
+        cur.execute(q_opts, (from_date, to_date))
     options_count = int(cur.fetchone()[0])
 
     cur.close()
@@ -537,7 +621,7 @@ except Exception as exc:
     print(json.dumps({"ok": False, "error": str(exc)}))
 '@
 
-$preflightRaw = $preflightScript | & $PYTHON_EXE - $From $To $effectiveIndexSymbol 2>$null
+$preflightRaw = $preflightScript | & $PYTHON_EXE - $From $To $effectiveIndexSymbol $indexTable $optionsTable $effectiveSourceDataKind 2>$null
 $preflight = $null
 if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($preflightRaw | Out-String))) {
     try {
@@ -567,6 +651,11 @@ Write-Host "[PREFLIGHT] Resolved backtest configuration (effective)" -Foreground
 Write-Host "  Strategy         : $effectiveStrategyName ($strategyNameSource)" -ForegroundColor White
 Write-Host "  Timeframe        : $effectiveTimeframe ($timeframeSource)" -ForegroundColor White
 Write-Host "  Symbol           : $effectiveIndexSymbol ($symbolSource)" -ForegroundColor White
+Write-Host "  Source table     : $effectiveSourceTable" -ForegroundColor White
+Write-Host "  Source data kind : $effectiveSourceDataKind" -ForegroundColor White
+Write-Host "  Options table    : $effectiveOptionsTable" -ForegroundColor White
+Write-Host "  Chunking days    : $effectiveChunkingDays" -ForegroundColor White
+Write-Host "  Max rows/chunk   : $effectiveMaxRowsPerChunk" -ForegroundColor White
 Write-Host "  Lot quantity     : $effectiveLotQuantity" -ForegroundColor White
 Write-Host "  Lot size         : $effectiveLotSize" -ForegroundColor White
 Write-Host "  Capital model    : $effectiveCapitalModel" -ForegroundColor White
@@ -599,6 +688,11 @@ $args_list += @(
     "--timeframe", $effectiveTimeframe,
     "--log-file", $effectiveLogFile,
     "--index-symbol", $effectiveIndexSymbol,
+    "--source-table", $effectiveSourceTable,
+    "--source-data-kind", $effectiveSourceDataKind,
+    "--options-source-table", $effectiveOptionsTable,
+    "--db-chunking-trading-days", $effectiveChunkingDays,
+    "--max-rows-per-chunk", $effectiveMaxRowsPerChunk,
     "--lot-size", $effectiveLotSize,
     "--lot-quantity", $effectiveLotQuantity,
     "--initial-capital", $effectiveInitialCapital,
@@ -634,6 +728,9 @@ Write-Host "Date range : $From -> $To"       -ForegroundColor White
 Write-Host "Strategy   : $effectiveStrategyName"      -ForegroundColor White
 Write-Host "Timeframe  : $effectiveTimeframe"         -ForegroundColor White
 Write-Host "Log file   : $effectiveLogFile"           -ForegroundColor White
+Write-Host "Src table  : $effectiveSourceTable"       -ForegroundColor White
+Write-Host "Src kind   : $effectiveSourceDataKind"    -ForegroundColor White
+Write-Host "Opts table : $effectiveOptionsTable"      -ForegroundColor White
 if ($Mode -eq "optimize") {
     Write-Host "Top results: $Top"            -ForegroundColor White
     Write-Host "Run prefix : $RunNamePrefix"  -ForegroundColor White

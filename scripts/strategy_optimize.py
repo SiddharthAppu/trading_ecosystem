@@ -47,7 +47,17 @@ if not DATABASE_URL:
 # strategy_backtest.py is in the same directory as this script.
 # We reuse its DB loading and adapter bridge helpers.
 sys.path.insert(0, os.path.dirname(__file__))
-from strategy_backtest import _load_index_bars, _run_strategy_adapter_mode, aggregate_to_5m  # noqa: E402
+from strategy_backtest import (  # noqa: E402
+    BacktestConfigError,
+    _load_index_data,
+    _normalize_source_data_kind,
+    _run_strategy_adapter_mode,
+    _validate_chunking_days,
+    _validate_max_rows_per_chunk,
+    _validate_options_schema,
+    _validate_source_schema,
+    _validate_table_name,
+)
 
 
 DEFAULT_OPTIMIZER_CONFIG = os.path.join(_config_dir, "strategy_optimize_ranges.json")
@@ -170,6 +180,33 @@ def main() -> None:
     )
     parser.add_argument("--index-symbol", default="NSE:NIFTY50-INDEX")
     parser.add_argument(
+        "--source-table",
+        default=os.getenv("STRATEGY_RUNTIME_SOURCE_TABLE", "").strip(),
+        help="Required source table for optimizer input data.",
+    )
+    parser.add_argument(
+        "--source-data-kind",
+        default=os.getenv("STRATEGY_RUNTIME_SOURCE_DATA_KIND", "").strip(),
+        help="Required source data kind: bars or ticks.",
+    )
+    parser.add_argument(
+        "--options-source-table",
+        default=os.getenv("STRATEGY_RUNTIME_OPTIONS_SOURCE_TABLE", "").strip(),
+        help="Required historical options source table used by resolver.",
+    )
+    parser.add_argument(
+        "--db-chunking-trading-days",
+        type=int,
+        default=int(os.getenv("STRATEGY_RUNTIME_DB_CHUNKING_TRADING_DAYS", "0") or "0"),
+        help="Required number of trading days to load per DB chunk.",
+    )
+    parser.add_argument(
+        "--max-rows-per-chunk",
+        type=int,
+        default=int(os.getenv("STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK", "0") or "0"),
+        help="Required fail-fast ceiling for estimated rows per DB chunk.",
+    )
+    parser.add_argument(
         "--strategy-name",
         default="nifty_trend_options",
         help="Strategy name metadata used for optimizer backtest artifacts.",
@@ -230,6 +267,11 @@ def main() -> None:
     print(f"Optimizer config path : {optimizer['path']}")
     print(f"Parameter grid        : {n_combos} combinations")
     print(f"Date range    : {args.from_date} → {args.to_date}")
+    print(f"Source table  : {args.source_table}")
+    print(f"Source kind   : {args.source_data_kind}")
+    print(f"Options table : {args.options_source_table}")
+    print(f"Chunking days : {args.db_chunking_trading_days}")
+    print(f"Max chunk rows: {args.max_rows_per_chunk}")
     print(f"Ranking by    : {args.sort_by}  (min_trades={args.min_trades})")
     print(
         "Early-stop    : "
@@ -252,8 +294,29 @@ def main() -> None:
     bars_5m: list[dict[str, Any]] = []
 
     try:
-        rows_1m = _load_index_bars(conn, args.index_symbol, args.from_date, args.to_date)
-        bars_5m = aggregate_to_5m(rows_1m)
+        source_table = _validate_table_name(args.source_table, config_key="source_table")
+        source_data_kind = _normalize_source_data_kind(args.source_data_kind)
+        options_source_table = _validate_table_name(
+            args.options_source_table,
+            config_key="options_source_table",
+        )
+        db_chunking_trading_days = _validate_chunking_days(args.db_chunking_trading_days)
+        max_rows_per_chunk = _validate_max_rows_per_chunk(args.max_rows_per_chunk)
+
+        _validate_source_schema(conn, source_table=source_table, source_data_kind=source_data_kind)
+        _validate_options_schema(conn, options_source_table=options_source_table)
+
+        rows_1m, bars_5m = _load_index_data(
+            conn,
+            source_table=source_table,
+            source_data_kind=source_data_kind,
+            symbol=args.index_symbol,
+            timeframe=args.timeframe,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            db_chunking_trading_days=db_chunking_trading_days,
+            max_rows_per_chunk=max_rows_per_chunk,
+        )
         total_bars = len(bars_5m)
         if total_bars == 0:
             print("No index bars available for date range/symbol. Exiting.")
@@ -279,6 +342,11 @@ def main() -> None:
                         strategy_name=args.strategy_name,
                         timeframe=args.timeframe,
                         index_symbol=args.index_symbol,
+                        source_table=source_table,
+                        source_data_kind=source_data_kind,
+                        options_source_table=options_source_table,
+                        db_chunking_trading_days=db_chunking_trading_days,
+                        max_rows_per_chunk=max_rows_per_chunk,
                         ema_period=int(params["ema_period"]),
                         sma_period=int(params["sma_period"]),
                         macd_fast=int(params["macd_fast"]),
@@ -317,6 +385,11 @@ def main() -> None:
                     strategy_name=args.strategy_name,
                     timeframe=args.timeframe,
                     index_symbol=args.index_symbol,
+                    source_table=source_table,
+                    source_data_kind=source_data_kind,
+                    options_source_table=options_source_table,
+                    db_chunking_trading_days=db_chunking_trading_days,
+                    max_rows_per_chunk=max_rows_per_chunk,
                     ema_period=int(params["ema_period"]),
                     sma_period=int(params["sma_period"]),
                     macd_fast=int(params["macd_fast"]),
@@ -347,6 +420,9 @@ def main() -> None:
 
             if (idx + 1) % 100 == 0 or (idx + 1) == n_combos:
                 print(f"  {idx+1}/{n_combos} done …")
+    except BacktestConfigError as exc:
+        print(f"ERROR: {exc}")
+        return
     finally:
         conn.close()
 

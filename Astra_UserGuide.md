@@ -635,6 +635,40 @@ Custom symbol:
   --symbol "NSE_INDEX|Nifty 50"
 ```
 
+### SQL query paths for backtest and optimize
+
+Both `scripts\strategy_backtest.py` and `scripts\strategy_optimize.py` use the same explicit source contract:
+- `STRATEGY_RUNTIME_SOURCE_TABLE`
+- `STRATEGY_RUNTIME_SOURCE_DATA_KIND` (`bars` or `ticks`)
+- `STRATEGY_RUNTIME_OPTIONS_SOURCE_TABLE`
+- `STRATEGY_RUNTIME_DB_CHUNKING_TRADING_DAYS`
+- `STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK`
+
+The selected table + data kind controls which SQL pattern is executed.
+
+| Stage | bars + `master_broker.ohlcv_1m` | bars + generic table | ticks + generic table |
+|---|---|---|---|
+| Trading day discovery | `SELECT DISTINCT time::date ... AND master_close IS NOT NULL` | `SELECT DISTINCT time::date ...` | `SELECT DISTINCT time::date ...` |
+| Chunk row estimate | `SELECT COUNT(*) ... AND master_close IS NOT NULL` | `SELECT COUNT(*) ...` | `SELECT COUNT(*) ...` |
+| Chunk row fetch | `SELECT time, COALESCE(open_upstox/open_fyers), COALESCE(high...), COALESCE(low...), master_close AS close, COALESCE(vol...)` | `SELECT time, open, high, low, close, COALESCE(volume,0)` | `SELECT time, price, COALESCE(volume,0)` |
+| Post-load transform | Aggregate 1m rows to target timeframe | Aggregate 1m rows to target timeframe | Tick -> 1m via `TickToOneMinuteBarAggregator`, then 1m -> target timeframe |
+
+Options lookup SQL (shared by backtest and optimize through the offline adapter):
+- Expiry selection: `SELECT DISTINCT expiry_date FROM <options_table> WHERE time <= $1 AND expiry_date >= $2::date ORDER BY expiry_date ASC`
+- Option chain snapshot: `SELECT DISTINCT ON (symbol) ... FROM <options_table> WHERE time <= $1 AND expiry_date = $2::date ... ORDER BY symbol, time DESC`
+- Latest option quotes: `SELECT DISTINCT ON (symbol) ... FROM <options_table> WHERE symbol = ANY($1::text[]) AND time <= $2 ... ORDER BY symbol, time DESC`
+
+Fail-fast behavior in both modes:
+- Missing/invalid source config raises config error before load.
+- Missing required columns raises schema error before load.
+- No trading days in the range raises missing-data error.
+- Estimated rows above `STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK` aborts before chunk fetch.
+
+### Legacy standalone script status
+
+`scripts\backtest_nifty_trend.py` is still present in the repository as a legacy standalone backtest script.
+It is not the primary explicit-source backtest/optimize path and still uses fixed table references (`master_broker.ohlcv_1m` and `master_broker.options_ohlc_1m_fromupstox`).
+
 ### Backtest output
 
 The backtest prints a summary table showing:
