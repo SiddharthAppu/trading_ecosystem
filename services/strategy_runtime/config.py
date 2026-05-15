@@ -10,6 +10,19 @@ class RuntimeConfigError(ValueError):
     """Raised when required runtime configuration is missing or invalid."""
 
 
+ALLOWED_FEED_SOURCES = {"broker", "replay_ws", "collector_sse"}
+
+
+def _normalize_feed_source(raw_value: str | None) -> str:
+    value = (raw_value or "broker").strip().lower()
+    if value in ALLOWED_FEED_SOURCES:
+        return value
+    raise RuntimeConfigError(
+        f"Invalid STRATEGY_RUNTIME_FEED_SOURCE: {raw_value}. "
+        f"Expected one of: {', '.join(sorted(ALLOWED_FEED_SOURCES))}"
+    )
+
+
 def _load_global_env() -> None:
     """Load central config/.env so shared secrets do not need per-strategy duplication."""
     config_dir = os.getenv("TRADING_CONFIG_DIR", os.path.join(os.getcwd(), "config"))
@@ -93,6 +106,13 @@ class RuntimeSettings:
     replay_speed: float = 5.0
     replay_start_time: str = ""
     replay_end_time: str = ""
+    collector_base_url: str = "http://localhost:8080"
+    collector_events_path: str = "/recorder/events"
+    collector_provider: str = ""
+    collector_connect_timeout_seconds: int = 10
+    collector_reconnect_seconds: int = 3
+    collector_stale_timeout_seconds: int = 45
+    collector_fallback_policy: str = "collector_only"
     source_table: str = ""
     source_data_kind: str = ""
     options_source_table: str = ""
@@ -100,6 +120,28 @@ class RuntimeSettings:
     max_rows_per_chunk: int = 0
 
     def validate_source_config(self) -> None:
+        if self.feed_source not in ALLOWED_FEED_SOURCES:
+            raise RuntimeConfigError(
+                f"Invalid feed_source: {self.feed_source}. Expected one of: {', '.join(sorted(ALLOWED_FEED_SOURCES))}"
+            )
+
+        if self.feed_source == "collector_sse":
+            if not self.collector_base_url:
+                raise RuntimeConfigError("Missing required config: STRATEGY_RUNTIME_COLLECTOR_BASE_URL")
+            if not self.collector_events_path:
+                raise RuntimeConfigError("Missing required config: STRATEGY_RUNTIME_COLLECTOR_EVENTS_PATH")
+            if self.collector_connect_timeout_seconds <= 0:
+                raise RuntimeConfigError("STRATEGY_RUNTIME_COLLECTOR_CONNECT_TIMEOUT_SECONDS must be greater than 0")
+            if self.collector_reconnect_seconds <= 0:
+                raise RuntimeConfigError("STRATEGY_RUNTIME_COLLECTOR_RECONNECT_SECONDS must be greater than 0")
+            if self.collector_stale_timeout_seconds <= 0:
+                raise RuntimeConfigError("STRATEGY_RUNTIME_COLLECTOR_STALE_TIMEOUT_SECONDS must be greater than 0")
+            if self.collector_fallback_policy not in {"collector_only", "fallback_to_broker"}:
+                raise RuntimeConfigError(
+                    "Invalid STRATEGY_RUNTIME_COLLECTOR_FALLBACK_POLICY. "
+                    "Expected one of: collector_only, fallback_to_broker"
+                )
+
         if self.feed_source != "replay_ws":
             return
         if not self.source_table:
@@ -124,7 +166,7 @@ class RuntimeSettings:
             capital_model = "non_compounding"
 
         settings = cls(
-            feed_source=os.getenv("STRATEGY_RUNTIME_FEED_SOURCE", "broker").strip().lower(),
+            feed_source=_normalize_feed_source(os.getenv("STRATEGY_RUNTIME_FEED_SOURCE", "broker")),
             provider=os.getenv("STRATEGY_RUNTIME_PROVIDER", "upstox").strip().lower(),
             trading_provider=os.getenv("STRATEGY_RUNTIME_TRADING_PROVIDER", "").strip().lower(),
             symbol=os.getenv("STRATEGY_RUNTIME_SYMBOL", "NSE_INDEX|Nifty 50").strip(),
@@ -159,6 +201,22 @@ class RuntimeSettings:
             replay_speed=float(os.getenv("STRATEGY_RUNTIME_REPLAY_SPEED", "5.0")),
             replay_start_time=os.getenv("STRATEGY_RUNTIME_REPLAY_START_TIME", "").strip(),
             replay_end_time=os.getenv("STRATEGY_RUNTIME_REPLAY_END_TIME", "").strip(),
+            collector_base_url=os.getenv("STRATEGY_RUNTIME_COLLECTOR_BASE_URL", "http://localhost:8080").strip(),
+            collector_events_path=os.getenv("STRATEGY_RUNTIME_COLLECTOR_EVENTS_PATH", "/recorder/events").strip(),
+            collector_provider=os.getenv("STRATEGY_RUNTIME_COLLECTOR_PROVIDER", "").strip().lower(),
+            collector_connect_timeout_seconds=int(
+                os.getenv("STRATEGY_RUNTIME_COLLECTOR_CONNECT_TIMEOUT_SECONDS", "10")
+            ),
+            collector_reconnect_seconds=int(
+                os.getenv("STRATEGY_RUNTIME_COLLECTOR_RECONNECT_SECONDS", "3")
+            ),
+            collector_stale_timeout_seconds=int(
+                os.getenv("STRATEGY_RUNTIME_COLLECTOR_STALE_TIMEOUT_SECONDS", "45")
+            ),
+            collector_fallback_policy=os.getenv(
+                "STRATEGY_RUNTIME_COLLECTOR_FALLBACK_POLICY",
+                "collector_only",
+            ).strip().lower(),
             source_table=os.getenv("STRATEGY_RUNTIME_SOURCE_TABLE", "").strip(),
             source_data_kind=os.getenv("STRATEGY_RUNTIME_SOURCE_DATA_KIND", "").strip().lower(),
             options_source_table=os.getenv("STRATEGY_RUNTIME_OPTIONS_SOURCE_TABLE", "").strip(),

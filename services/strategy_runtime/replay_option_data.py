@@ -14,7 +14,8 @@ class ReplayOptionDataResolver:
 
     def __init__(self, settings):
         self.settings = settings
-        self.options_table = os.getenv(
+        configured_table = str(getattr(settings, "options_source_table", "") or "").strip()
+        self.options_table = configured_table or os.getenv(
             "STRATEGY_RUNTIME_REPLAY_OPTIONS_TABLE",
             "master_broker.options_ohlc_1m_fromupstox",
         )

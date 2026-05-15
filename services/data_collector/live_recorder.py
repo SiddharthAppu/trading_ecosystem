@@ -271,6 +271,7 @@ class LiveTickRecorder:
     def _on_fyers_message(self, message):
         if not isinstance(message, dict) or message.get("type") in ("cn", "ful", "sub"): return
         self.ticks_received_total += 1
+        event_ts = datetime.now(timezone.utc)
         
         # Fyers LiteMode=False provides rich market depth via these standard internal keys
         vol = message.get("v") or message.get("vol_traded_today") or 0
@@ -279,7 +280,7 @@ class LiveTickRecorder:
 
         # Complex tick capture: (ts, symbol, price, volume, oi, delta, theta, bid, ask)
         self.tick_buffer.append((
-            datetime.now(timezone.utc), 
+            event_ts,
             message.get("symbol"), 
             message.get("ltp"), 
             vol, 
@@ -289,6 +290,30 @@ class LiveTickRecorder:
             bid, 
             ask
         ))
+
+        try:
+            asyncio.get_running_loop().create_task(
+                self.event_queue.put(
+                    {
+                        "type": "tick",
+                        "provider": self.provider_name,
+                        "time": event_ts.isoformat(),
+                        "symbol": message.get("symbol"),
+                        "price": message.get("ltp"),
+                        "volume": vol,
+                        "oi": message.get("oi", 0),
+                        "bid": bid,
+                        "ask": ask,
+                        "delta": message.get("delta"),
+                        "theta": message.get("theta"),
+                        "gamma": message.get("gamma"),
+                        "vega": message.get("vega"),
+                        "iv": message.get("iv") or message.get("implied_volatility"),
+                    }
+                )
+            )
+        except RuntimeError:
+            pass
 
         greeks = {
             "delta": message.get("delta"),
@@ -415,7 +440,8 @@ class LiveTickRecorder:
             if ltp is None:
                 continue
             self.ticks_received_total += 1
-            self.last_tick_at = datetime.now(timezone.utc).isoformat()
+            event_ts = datetime.now(timezone.utc)
+            self.last_tick_at = event_ts.isoformat()
             volume = self._nested_find_first(feed_payload, ("vtt", "volume", "volTradedToday")) or 0
             oi = self._nested_find_first(feed_payload, ("oi", "open_interest", "openInterest")) or 0
             bid, ask = self._extract_upstox_bid_ask(feed_payload)
@@ -423,7 +449,7 @@ class LiveTickRecorder:
             
             # Complex tick capture: (ts, symbol, price, volume, oi, delta, theta, bid, ask)
             self.tick_buffer.append((
-                datetime.now(timezone.utc), 
+                event_ts,
                 instrument_key, 
                 ltp, 
                 volume, 
@@ -433,6 +459,30 @@ class LiveTickRecorder:
                 bid, 
                 ask
             ))
+
+            try:
+                asyncio.get_running_loop().create_task(
+                    self.event_queue.put(
+                        {
+                            "type": "tick",
+                            "provider": self.provider_name,
+                            "time": event_ts.isoformat(),
+                            "symbol": instrument_key,
+                            "price": ltp,
+                            "volume": volume,
+                            "oi": oi,
+                            "bid": bid,
+                            "ask": ask,
+                            "delta": greeks.get("delta"),
+                            "theta": greeks.get("theta"),
+                            "gamma": greeks.get("gamma"),
+                            "vega": greeks.get("vega"),
+                            "iv": greeks.get("iv"),
+                        }
+                    )
+                )
+            except RuntimeError:
+                pass
 
             if any(value is not None for value in greeks.values()):
                 self.greeks_received_total += 1

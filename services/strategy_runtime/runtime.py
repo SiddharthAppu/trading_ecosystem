@@ -25,7 +25,7 @@ from trading_core.strategies import Strategy, StrategyContext
 
 from services.strategy_runtime.portfolio import PortfolioManager
 from services.strategy_runtime.executor import PaperExecutor, LiveExecutor
-from services.strategy_runtime.config import RuntimeSettings
+from services.strategy_runtime.config import RuntimeConfigError, RuntimeSettings
 from services.strategy_runtime.notifier import CompositeNotifier, NotificationMessage
 from services.strategy_runtime.replay_option_data import ReplayOptionDataResolver
 from services.strategy_runtime.strategies import load_strategy, load_strategy_params
@@ -57,6 +57,22 @@ def _bucket_start(timestamp: datetime, minutes: int) -> datetime:
     truncated = timestamp.replace(second=0, microsecond=0)
     bucket_minute = (truncated.minute // minutes) * minutes
     return truncated.replace(minute=bucket_minute)
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    token = str(value).strip().lower()
+    return token in {"1", "true", "yes", "y", "on"}
+
+
+def _parse_iso_datetime(raw_value: str) -> datetime:
+    text = str(raw_value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    return datetime.fromisoformat(text)
 
 
 @dataclass(slots=True)
@@ -311,6 +327,226 @@ class BrokerPollingBarFeed:
         return recent_bars
 
 
+class CollectorSseBarFeed:
+    def __init__(self, settings: RuntimeSettings):
+        self.settings = settings
+        self._queue: asyncio.Queue[Bar] = asyncio.Queue()
+        self._history: list[Bar] = []
+        self._reader_task: asyncio.Task | None = None
+        self._completed = False
+        self._error: str = ""
+        self._target_minutes = _timeframe_to_minutes(self.settings.timeframe)
+        self._tick_to_one_min = TickToOneMinuteBarAggregator(self.settings.symbol)
+        self._one_min_to_target = (
+            BarTimeframeAggregator(self.settings.symbol, self.settings.timeframe, self._target_minutes)
+            if self._target_minutes > 1
+            else None
+        )
+        self._fallback_feed: BrokerPollingBarFeed | None = None
+        self._fallback_active = False
+
+    @property
+    def completed(self) -> bool:
+        return self._completed
+
+    @property
+    def error(self) -> str:
+        return self._error
+
+    def _event_url(self) -> str:
+        base = self.settings.collector_base_url.rstrip("/")
+        path = self.settings.collector_events_path.strip() or "/recorder/events"
+        if not path.startswith("/"):
+            path = f"/{path}"
+        provider = (self.settings.collector_provider or self.settings.provider).strip().lower()
+        separator = "&" if "?" in path else "?"
+        return f"{base}{path}{separator}provider={provider}"
+
+    def _emit_bar(self, bar: Bar) -> None:
+        self._history.append(bar)
+        if len(self._history) > self.settings.lookback_bars:
+            self._history = self._history[-self.settings.lookback_bars :]
+        self._queue.put_nowait(bar)
+
+    def _route_one_min_bar(self, one_min_bar: Bar) -> list[Bar]:
+        if not self._one_min_to_target:
+            return [
+                Bar(
+                    symbol=one_min_bar.symbol,
+                    timestamp=one_min_bar.timestamp,
+                    open=one_min_bar.open,
+                    high=one_min_bar.high,
+                    low=one_min_bar.low,
+                    close=one_min_bar.close,
+                    volume=one_min_bar.volume,
+                    timeframe=self.settings.timeframe,
+                )
+            ]
+        return self._one_min_to_target.push_bar(one_min_bar)
+
+    def _ingest_tick_event(self, event: dict[str, Any]) -> list[Bar]:
+        symbol = str(event.get("symbol") or "").strip()
+        if symbol != self.settings.symbol:
+            return []
+        if event.get("price") is None or event.get("time") is None:
+            return []
+        try:
+            timestamp = _parse_iso_datetime(str(event["time"]))
+            price = float(event["price"])
+            volume = int(event.get("volume", 0) or 0)
+        except (TypeError, ValueError):
+            return []
+
+        one_minute_bars = self._tick_to_one_min.push_tick(timestamp, price, volume)
+        output: list[Bar] = []
+        for one_min in one_minute_bars:
+            output.extend(self._route_one_min_bar(one_min))
+        return output
+
+    def _activate_fallback(self, reason: str) -> None:
+        if self.settings.collector_fallback_policy != "fallback_to_broker":
+            return
+        if self._fallback_feed is None:
+            self._fallback_feed = BrokerPollingBarFeed(self.settings)
+        self._fallback_active = True
+        self._error = reason
+        logger.warning("Collector feed fallback activated: %s", reason)
+
+    async def _stream_once(self) -> None:
+        target_url = self._event_url()
+        parsed = urlparse(target_url)
+        if parsed.scheme != "http" or not parsed.hostname:
+            raise RuntimeError(f"collector_sse currently supports only http URLs: {target_url}")
+
+        host = parsed.hostname
+        port = parsed.port or 80
+        raw_path = parsed.path or "/"
+        if parsed.query:
+            raw_path = f"{raw_path}?{parsed.query}"
+
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port),
+            timeout=self.settings.collector_connect_timeout_seconds,
+        )
+        request = (
+            f"GET {raw_path} HTTP/1.1\r\n"
+            f"Host: {host}:{port}\r\n"
+            "Accept: text/event-stream\r\n"
+            "Cache-Control: no-cache\r\n"
+            "Connection: keep-alive\r\n\r\n"
+        )
+        writer.write(request.encode("utf-8"))
+        await writer.drain()
+
+        status_line = await asyncio.wait_for(
+            reader.readline(),
+            timeout=self.settings.collector_connect_timeout_seconds,
+        )
+        if not status_line.startswith(b"HTTP/1.1 200") and not status_line.startswith(b"HTTP/1.0 200"):
+            writer.close()
+            await writer.wait_closed()
+            raise RuntimeError(f"collector stream rejected: {status_line.decode(errors='replace').strip()}")
+
+        while True:
+            header_line = await reader.readline()
+            if not header_line or header_line in {b"\r\n", b"\n"}:
+                break
+
+        data_lines: list[str] = []
+        while True:
+            raw_line = await asyncio.wait_for(
+                reader.readline(),
+                timeout=self.settings.collector_stale_timeout_seconds,
+            )
+            if not raw_line:
+                raise RuntimeError("collector stream closed")
+            line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+
+            if not line:
+                if data_lines:
+                    payload = "\n".join(data_lines)
+                    data_lines.clear()
+                    try:
+                        event = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    if str(event.get("type") or "").strip().lower() != "tick":
+                        continue
+                    bars = self._ingest_tick_event(event)
+                    for bar in bars:
+                        self._emit_bar(bar)
+                continue
+
+            if line.startswith("data:"):
+                data_lines.append(line[5:].lstrip())
+
+    async def _read_stream(self) -> None:
+        reconnect_delay = max(1, self.settings.collector_reconnect_seconds)
+        while not self._completed:
+            try:
+                await self._stream_once()
+            except (RuntimeError, OSError, TimeoutError, ValueError) as exc:
+                reason = str(exc)
+                self._error = reason
+                if self.settings.collector_fallback_policy == "fallback_to_broker":
+                    self._activate_fallback(reason)
+                    return
+                logger.warning("Collector SSE stream error: %s. reconnecting in %ss", reason, reconnect_delay)
+                await asyncio.sleep(reconnect_delay)
+
+    async def _ensure_started(self) -> None:
+        if self._reader_task and not self._reader_task.done():
+            return
+        self._reader_task = asyncio.create_task(self._read_stream())
+
+    async def fetch(self) -> list[Bar]:
+        if self._fallback_active and self._fallback_feed is not None:
+            bars = await self._fallback_feed.fetch()
+            if not bars:
+                await asyncio.sleep(max(1, self.settings.polling_interval_seconds))
+            return bars
+
+        await self._ensure_started()
+
+        if self._completed and self._queue.empty():
+            return []
+
+        if self._error and self.settings.collector_fallback_policy != "fallback_to_broker":
+            # Keep retry loop alive for collector_only; do not fail runtime unless nothing arrives.
+            pass
+
+        try:
+            await asyncio.wait_for(self._queue.get(), timeout=self.settings.collector_stale_timeout_seconds)
+        except TimeoutError:
+            if self.settings.collector_fallback_policy == "fallback_to_broker":
+                self._activate_fallback("collector stream stale timeout")
+                if self._fallback_feed is not None:
+                    return await self._fallback_feed.fetch()
+            return []
+
+        return self._history[-self.settings.lookback_bars :]
+
+    def get_aggregation_status(self) -> dict[str, Any]:
+        return {
+            "enabled": True,
+            "source": "collector_sse",
+            "fallback_active": self._fallback_active,
+            "fallback_policy": self.settings.collector_fallback_policy,
+            "open_tick_bucket_start": (
+                isoformat_ist(self._tick_to_one_min.current_bucket_start())
+                if self._tick_to_one_min and self._tick_to_one_min.current_bucket_start()
+                else None
+            ),
+            "open_target_bucket_start": (
+                isoformat_ist(self._one_min_to_target.current_bucket_start())
+                if self._one_min_to_target and self._one_min_to_target.current_bucket_start()
+                else None
+            ),
+        }
+
+
 class ReplayWebSocketBarFeed:
     def __init__(self, settings: RuntimeSettings):
         self.settings = settings
@@ -389,8 +625,18 @@ class ReplayWebSocketBarFeed:
 
     def _route_one_min_bar(self, one_min_bar: Bar) -> list[Bar]:
         if not self._one_min_to_target:
-            one_min_bar.timeframe = self.settings.timeframe
-            return [one_min_bar]
+            return [
+                Bar(
+                    symbol=one_min_bar.symbol,
+                    timestamp=one_min_bar.timestamp,
+                    open=one_min_bar.open,
+                    high=one_min_bar.high,
+                    low=one_min_bar.low,
+                    close=one_min_bar.close,
+                    volume=one_min_bar.volume,
+                    timeframe=self.settings.timeframe,
+                )
+            ]
         return self._one_min_to_target.push_bar(one_min_bar)
 
     def _ingest_tick_row(self, row: dict[str, Any]) -> list[Bar]:
@@ -569,7 +815,29 @@ class StrategyRuntime:
     def _build_feed(self, settings: RuntimeSettings):
         if settings.feed_source == "replay_ws":
             return ReplayWebSocketBarFeed(settings)
+        if settings.feed_source == "collector_sse":
+            return CollectorSseBarFeed(settings)
         return BrokerPollingBarFeed(settings)
+
+    def _validate_strategy_feed_requirements(self, strategy_params: dict[str, Any]) -> None:
+        requires_ticks = _to_bool(strategy_params.get("requires_ticks"))
+        requires_bid_ask = _to_bool(strategy_params.get("requires_bid_ask"))
+        requires_greeks = _to_bool(strategy_params.get("requires_greeks"))
+
+        if not (requires_ticks or requires_bid_ask or requires_greeks):
+            return
+
+        if requires_ticks and self.settings.feed_source == "broker":
+            raise RuntimeConfigError(
+                "Strategy requires tick-level input but feed_source=broker uses polling bars. "
+                "Use STRATEGY_RUNTIME_FEED_SOURCE=collector_sse or replay_ws."
+            )
+
+        if (requires_bid_ask or requires_greeks) and self.settings.feed_source != "collector_sse":
+            raise RuntimeConfigError(
+                "Strategy requires bid/ask or greeks but selected feed source does not provide them in live lane. "
+                "Use STRATEGY_RUNTIME_FEED_SOURCE=collector_sse."
+            )
 
     def _build_strategy(self) -> Strategy:
         strategy_params = load_strategy_params(self.settings.strategy_name)
@@ -581,8 +849,11 @@ class StrategyRuntime:
                 "initial_capital": self.settings.initial_capital,
                 "provider": self.settings.provider,
                 "timeframe": self.settings.timeframe,
+                "feed_source": self.settings.feed_source,
             }
         )
+
+        self._validate_strategy_feed_requirements(strategy_params)
 
         ctx = StrategyContext(
             bus,
@@ -1211,7 +1482,7 @@ class StrategyRuntime:
                 await self.strategy.evaluate_snapshot(snapshot)
                 await self._publish_market_event(snapshot.bar)
                 await self._apply_position_risk(snapshot)
-            if self.settings.feed_source != "replay_ws":
+            if self.settings.feed_source == "broker":
                 await asyncio.sleep(self.settings.polling_interval_seconds)
             elif getattr(self.feed, "completed", False) and not bars:
                 logger.info("Replay feed completed; stopping runtime loop")
