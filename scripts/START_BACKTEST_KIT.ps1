@@ -45,6 +45,11 @@
     .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -Symbol "NSE_INDEX|Nifty 50"
     .\START_BACKTEST_KIT.ps1 -Smoke -From 2026-04-28 -To 2026-04-28
     .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -StrategyConfig "config\strategy_runtime.backtest_example.env"
+    .\START_BACKTEST_KIT.ps1 -Mode backtest -From 2026-04-15 -To 2026-04-16 -StrategyConfig "config\strategy_runtime.nifty_trend_options.backtest_bars.env.example"
+    .\START_BACKTEST_KIT.ps1 -Mode backtest -From 2026-04-15 -To 2026-04-16 -StrategyConfig "config\strategy_runtime.nifty_trend_options.backtest_ticks_partial.env.example"
+    .\START_BACKTEST_KIT.ps1 -Mode backtest -From 2026-04-15 -To 2026-04-16 -StrategyConfig "config\strategy_runtime.nifty_trend_options.backtest_ticks_full.env.example"
+    .\START_BACKTEST_KIT.ps1 -Mode optimize -From 2026-04-15 -To 2026-04-16 -Top 10 -StrategyConfig "config\strategy_runtime.nifty_trend_options.optimize_bars.env.example" -OptimizerConfig "config\strategy_optimize_ranges.json"
+    .\START_BACKTEST_KIT.ps1 -Mode optimize -From 2026-04-15 -To 2026-04-16 -Top 10 -StrategyConfig "config\strategy_runtime.nifty_trend_options.optimize_ticks.env.example" -OptimizerConfig "config\strategy_optimize_ranges.json"
 #>
 param(
     [string]$From   = "",

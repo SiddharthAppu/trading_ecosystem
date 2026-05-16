@@ -55,17 +55,21 @@ if (-not (Test-Path $RUNTIME_SERVER)) {
 }
 
 $defaultStrategyEnv = Join-Path $ROOT "config\strategy_runtime.$Strategy.paper_replay.env"
+$defaultNiftyReplayEnv = Join-Path $ROOT "config\strategy_runtime.nifty_trend_options.replay_ticks.env.example"
 $defaultGenericEnv = Join-Path $ROOT "config\strategy_runtime.paper_replay.env"
 
 if ([string]::IsNullOrWhiteSpace($EnvFile)) {
     if (Test-Path $defaultStrategyEnv) {
         $envPath = $defaultStrategyEnv
     }
+    elseif ($Strategy -eq "nifty_trend_options" -and (Test-Path $defaultNiftyReplayEnv)) {
+        $envPath = $defaultNiftyReplayEnv
+    }
     elseif (Test-Path $defaultGenericEnv) {
         $envPath = $defaultGenericEnv
     }
     else {
-        Write-Error "No env file found. Checked $defaultStrategyEnv and $defaultGenericEnv"
+        Write-Error "No env file found. Checked $defaultStrategyEnv, $defaultNiftyReplayEnv and $defaultGenericEnv"
         exit 1
     }
 }

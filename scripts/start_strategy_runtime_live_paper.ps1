@@ -68,17 +68,21 @@ if (-not (Test-Path $AUTH_HELPER)) {
 }
 
 $defaultStrategyEnv = Join-Path $ROOT "config\strategy_runtime.$Strategy.paper_live.env"
+$defaultNiftyBrokerEnv = Join-Path $ROOT "config\strategy_runtime.nifty_trend_options.live_broker.env.example"
 $defaultGenericEnv = Join-Path $ROOT "config\strategy_runtime.paper_live.env"
 
 if ([string]::IsNullOrWhiteSpace($EnvFile)) {
     if (Test-Path $defaultStrategyEnv) {
         $envPath = $defaultStrategyEnv
     }
+    elseif ($Strategy -eq "nifty_trend_options" -and (Test-Path $defaultNiftyBrokerEnv)) {
+        $envPath = $defaultNiftyBrokerEnv
+    }
     elseif (Test-Path $defaultGenericEnv) {
         $envPath = $defaultGenericEnv
     }
     else {
-        Write-Error "No env file found. Checked $defaultStrategyEnv and $defaultGenericEnv"
+        Write-Error "No env file found. Checked $defaultStrategyEnv, $defaultNiftyBrokerEnv and $defaultGenericEnv"
         exit 1
     }
 }
