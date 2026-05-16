@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 import logging
 import re
 from datetime import datetime, timezone
@@ -59,7 +60,11 @@ def configure_logging(settings: RuntimeSettings) -> None:
 
 
 async def main() -> None:
-    settings = RuntimeSettings.from_env()
+    parser = argparse.ArgumentParser(description="Run strategy runtime")
+    parser.add_argument("--config", required=True, help="Path to strategy runtime JSON config")
+    args = parser.parse_args()
+
+    settings = RuntimeSettings.from_json(args.config)
     configure_logging(settings)
     runtime = create_runtime(settings)
     await runtime.run()

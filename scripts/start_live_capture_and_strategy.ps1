@@ -42,7 +42,7 @@ Start-Process -FilePath $PYTHON_EXE_COLLECTOR -ArgumentList $recorderArgs -Worki
 
 # 3. Start Strategy Runtime
 Write-Host "[3/3] Starting Strategy Runtime ($Strategy)..."
-$runtimeEnv = if ($EnvFile) { $EnvFile } else { "config\strategy_runtime.$Strategy.paper_live.env" }
+$runtimeEnv = if ($EnvFile) { $EnvFile } else { "config\strategy_runtime.$Strategy.paper_live.json" }
 $runtimeArgs = @("$PSScriptRoot\start_strategy_runtime_live_paper.ps1", "-Strategy", $Strategy, "-EnvFile", $runtimeEnv)
 if ($SkipAuthCheck) { $runtimeArgs += "-SkipAuthCheck" }
 

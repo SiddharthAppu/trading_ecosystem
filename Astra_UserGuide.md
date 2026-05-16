@@ -60,7 +60,7 @@ Contents:
 - `services/replay_engine/` — WebSocket server that streams historical 1-minute bars from TimescaleDB
 - `packages/trading_core/` — shared models, adapters, event bus
 - `scripts/` — launcher scripts
-- `config/` — env files and credentials
+- `config/` — JSON strategy configs and credentials
 
 ### astra-backtest-kit-v1-windows
 **Use case:** Run a full backtest or parameter optimisation over any date range using DB data, no running services needed.
@@ -78,7 +78,7 @@ Contents:
 Contents:
 - `services/strategy_runtime/` — includes the replay option data resolver and `replay_ws` feed support
 - `packages/trading_core/`
-- `config/` — includes `strategy_runtime.paper_replay.env.example` and `strategy_runtime.paper_live.env.example`
+- `config/` — includes `strategy_runtime.paper_replay.json.example` and `strategy_runtime.paper_live.json.example`
 - `scripts/start_live_capture_and_strategy.ps1` — **Unified launcher** (Data + Strategy)
 - `scripts/start_strategy_runtime_live_paper.ps1` — Strategy-only live launcher
 - `scripts/start_strategy_runtime_paper_replay.ps1` — replay-paper launcher (connects to external replay engine)
@@ -174,7 +174,7 @@ dist\
 - `scripts/start_strategy_runtime_paper_replay.ps1`
 - `scripts/start_strategy_runtime_live_paper.ps1`
 - `scripts/authenticate_broker.py`
-- `config/strategy_runtime.paper_replay.env` + `.env` (if present in workspace)
+- `config/strategy_runtime.paper_replay.json` + `.env` (if present in workspace)
 - STRATEGY.md and ARCHITECTURE_DIAGRAMS.md
 
 > `START_REPLAY_KIT.ps1` is sourced from `scripts/START_REPLAY_KIT.ps1` in the workspace but placed at the **kit root** during build so you can run `.\START_REPLAY_KIT.ps1` directly without navigating to a subdirectory.
@@ -240,36 +240,47 @@ pip install --no-index --find-links .\wheelhouse -e .\packages\trading_core
 
 Edit `config\.env` with your database and (optionally) Telegram credentials. See [Section 3](#3-prerequisites) for the template.
 
-### Step 5: Configure the strategy env file (replay kit)
+### Step 5: Configure the strategy JSON file (replay kit)
 
-Edit `config\strategy_runtime.paper_replay.env`:
+Edit `config\strategy_runtime.paper_replay.json`:
 
-```dotenv
-STRATEGY_RUNTIME_FEED_SOURCE=replay_ws
-STRATEGY_RUNTIME_PROVIDER=fyers
-STRATEGY_RUNTIME_SYMBOL=NSE:NIFTY50-INDEX
-STRATEGY_RUNTIME_TIMEFRAME=1m
-STRATEGY_RUNTIME_STRATEGY=nifty_trend_options
-STRATEGY_RUNTIME_LOT_QUANTITY=1
-STRATEGY_RUNTIME_LOT_SIZE=75
-STRATEGY_RUNTIME_INITIAL_CAPITAL=100000
-STRATEGY_RUNTIME_CAPITAL_MODEL=non_compounding
-STRATEGY_RUNTIME_STOP_LOSS_PCT=0.60
-STRATEGY_RUNTIME_REPLAY_WS_URL=ws://localhost:8765
-STRATEGY_RUNTIME_REPLAY_SPEED=5
-STRATEGY_RUNTIME_REPLAY_START_TIME=2026-04-15T09:15:00+05:30
-STRATEGY_RUNTIME_REPLAY_END_TIME=2026-04-15T15:30:00+05:30
-TELEGRAM_ENABLED=false
-
-# NIFTY Trend Options strategy parameters
-NIFTY_PREMIUM_TARGET=200.0
-NIFTY_PREMIUM_TOLERANCE=30.0
-NIFTY_REWARD_RISK_RATIO=2.0
-NIFTY_EMA_PERIOD=20
-NIFTY_SMA_PERIOD=20
-NIFTY_MACD_FAST=12
-NIFTY_MACD_SLOW=26
-NIFTY_MACD_SIGNAL=9
+```json
+{
+  "runtime": {
+    "feed_source": "replay_ws",
+    "provider": "fyers",
+    "symbol": "NSE:NIFTY50-INDEX",
+    "timeframe": "1m"
+  },
+  "strategy": {
+    "name": "nifty_trend_options"
+  },
+  "risk": {
+    "lot_quantity": 1,
+    "lot_size": 75,
+    "initial_capital": 100000,
+    "capital_model": "non_compounding",
+    "stop_loss_pct": 0.60
+  },
+  "replay": {
+    "ws_url": "ws://localhost:8765",
+    "speed": 5,
+    "start_time": "2026-04-15T09:15:00+05:30",
+    "end_time": "2026-04-15T15:30:00+05:30"
+  },
+  "telegram": {
+    "enabled": false
+  },
+  "strategy_params": {
+    "NIFTY_TARGET_PREMIUM": 200.0,
+    "NIFTY_PREMIUM_TOLERANCE": 30.0,
+    "NIFTY_EMA_PERIOD": 20,
+    "NIFTY_SMA_PERIOD": 20,
+    "NIFTY_MACD_FAST": 12,
+    "NIFTY_MACD_SLOW": 26,
+    "NIFTY_MACD_SIGNAL": 9
+  }
+}
 ```
 
 ---
@@ -288,7 +299,7 @@ From inside the replay kit root:
 
 This automatically:
 1. Loads `config\.env` (DB + Telegram creds)
-2. Loads `config\strategy_runtime.paper_replay.env` (strategy config)
+2. Loads `config\strategy_runtime.paper_replay.json` (strategy config)
 3. Prints a **preflight summary** with absolute config paths, DB details, resolved replay source table, replay time window, and expected behavior
 4. Calls the replay HTTP API to check how many replay rows are available for the current symbol/provider/time window
 5. In default `interactive` mode, asks for confirmation before launch
@@ -339,7 +350,7 @@ You can override the default configuration files if you have multiple strategy s
 
 ```powershell
 # Point to a specific strategy config
-.\START_REPLAY_KIT.ps1 -EnvFile "config\strategy_runtime.ema_cross.paper_replay.env"
+.\START_REPLAY_KIT.ps1 -EnvFile "config\strategy_runtime.ema_cross.paper_replay.json"
 
 # Point to custom global credentials (DB etc.)
 .\START_REPLAY_KIT.ps1 -GlobalEnv "C:\Secrets\.env"
@@ -471,7 +482,7 @@ By default the replay engine streams pre-aggregated 1-minute OHLCV bars (`ohlcv_
 
 **How to enable:**
 
-In `config\strategy_runtime.paper_replay.env`:
+In `config\strategy_runtime.paper_replay.json`:
 
 ```dotenv
 # Tell the replay engine to stream raw tick events instead of OHLCV bars
@@ -595,18 +606,18 @@ Show top 15 parameter combinations instead of default 10:
 By default, `START_BACKTEST_KIT.ps1` also reads strategy metadata from:
 
 ```text
-config\strategy_runtime.paper_replay.env
+config\strategy_runtime.paper_replay.json
 ```
 
 It picks these keys when present:
-- `STRATEGY_RUNTIME_STRATEGY` -> backtest `--strategy-name`
-- `STRATEGY_RUNTIME_TIMEFRAME` -> backtest `--timeframe`
-- `STRATEGY_RUNTIME_LOG_FILE` -> backtest `--log-file`
+- `strategy.name` -> backtest `--strategy-name`
+- `runtime.timeframe` -> backtest `--timeframe`
+- `runtime.log_file` -> backtest `--log-file`
 
 Use a different strategy config file with:
 
 ```powershell
-.\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -StrategyConfig "config\strategy_runtime.ema_cross.paper_replay.env"
+.\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -StrategyConfig "config\strategy_runtime.ema_cross.paper_replay.json"
 ```
 
 CLI parameters always override values loaded from the strategy config file.
@@ -764,7 +775,7 @@ Recorder persistence is configurable (`--enable-db true|false|default`). For low
 
 This mode places real broker orders while still using live market data. Use only after paper-mode validation and risk checks.
 
-To enable live execution, set `STRATEGY_RUNTIME_TRADING_PROVIDER` to a live adapter (for example `zerodha`) in your live env file, then launch normally:
+To enable live execution, set `runtime.trading_provider` to a live adapter (for example `zerodha`) in your live JSON config file, then launch normally:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start_strategy_runtime_live_paper.ps1 -Strategy ema_cross
@@ -791,8 +802,8 @@ The `ema_cross` strategy is a trend-following momentum strategy designed for NIF
 - **Logic:** The strategy closes the position as soon as the price breaks the short-term trend line (EMA 20).
 
 ### Key Parameters
-- `STRATEGY_RUNTIME_TIMEFRAME`: 5m (Standard)
-- `STRATEGY_RUNTIME_INDICATORS`: `ema_20,sma_20`
+- `runtime.timeframe`: `5m` (Standard)
+- `strategy.indicators`: `ema_20,sma_20`
 
 ---
 
@@ -801,13 +812,13 @@ The `ema_cross` strategy is a trend-following momentum strategy designed for NIF
 Astra enforces risk management at the **Infrastructure (Runtime) Level**, independent of the specific strategy code. This ensures safety even if a strategy has a logic bug.
 
 ### Global Safety Toggles
-In your `.env` file, these parameters control the **RuntimeRiskManager**:
+In your strategy runtime JSON config, these parameters control the **RuntimeRiskManager**:
 
 | Parameter | Default | Description |
 |---|---|---|
-| `STRATEGY_RUNTIME_STOP_LOSS_PCT` | `0.01` (1%) | Hard stop loss relative to entry price. |
-| `STRATEGY_RUNTIME_TRAILING_STOP_PCT` | `0.015` (1.5%) | Automatically trails the price at a 1.5% distance. |
-| `STRATEGY_RUNTIME_MAX_POSITION_LOTS` | `1` | Maximum lots allowed for any single symbol. |
+| `risk.stop_loss_pct` | `0.01` (1%) | Hard stop loss relative to entry price. |
+| `risk.trailing_stop_pct` | `0.015` (1.5%) | Automatically trails the price at a 1.5% distance. |
+| `risk.max_position_lots` | `1` | Maximum lots allowed for any single symbol. |
 
 **Important:** If the price hits your 1% Stop Loss, the **Engine** will force-exit the position and record a `STOP_LOSS_EXIT` in the journal, even if the strategy logic hasn't triggered an exit yet.
 
@@ -836,19 +847,19 @@ python .\scripts\lib\import_ticks_to_db.py --date 2026-05-06 --dir .\logs\ticks
 ### Example config files index
 
 Comprehensive templates with extensive per-parameter descriptions:
-- `config\strategy_runtime.explicit_replay.full.env.example` - full replay/runtime template with explicit source contract and fail-fast chunking controls.
-- `config\strategy_runtime.explicit_live.full.env.example` - full live/broker runtime template with complete parameter vocabulary.
-- `config\strategy_backtest.explicit_full.env.example` - full backtest template with explicit source contract and chunking controls.
+- `config\strategy_runtime.explicit_replay.full.json.example` - full replay/runtime template with explicit source contract and fail-fast chunking controls.
+- `config\strategy_runtime.explicit_live.full.json.example` - full live/broker runtime template with complete parameter vocabulary.
+- `config\strategy_backtest.explicit_full.env.example` - backtest-only env template for explicit source contract and chunking controls.
 
 Concrete defaults (Upstox-first) for quick start:
-- `config\strategy_runtime.upstox.replay_ticks.default.env.example` - replay using Upstox tick table (`broker_upstox.market_ticks`).
-- `config\strategy_runtime.upstox.replay_bars.default.env.example` - replay using Upstox bar table (`broker_upstox.ohlcv_1m`).
+- `config\strategy_runtime.upstox.replay_ticks.default.json.example` - replay using Upstox tick table (`broker_upstox.market_ticks`).
+- `config\strategy_runtime.upstox.replay_bars.default.json.example` - replay using Upstox bar table (`broker_upstox.ohlcv_1m`).
 
 Notes:
 - The concrete defaults use Upstox for provider, index symbol format, source tables, and options table.
 - For backtest, pair one of the above with `scripts\strategy_backtest.py --from <YYYY-MM-DD> --to <YYYY-MM-DD>` and adjust source table/data kind as needed.
 
-### strategy_runtime.paper_replay.env — key applicability by capital mode
+### strategy_runtime.paper_replay.json — key applicability by capital mode
 
 Modes:
 - `non_compounding`: Trade size remains `STRATEGY_RUNTIME_LOT_QUANTITY` lots. In adapter backtest/optimize runs, capital is refilled to baseline after losses.
@@ -864,21 +875,21 @@ Legend:
 
 | Key | Description | Applies To | Example |
 |---|---|---|---|
-| `STRATEGY_RUNTIME_FEED_SOURCE` | `broker` or `replay_ws` | `RP, LK` | `replay_ws` |
-| `STRATEGY_RUNTIME_PROVIDER` | Broker provider namespace | `RP, LK` | `fyers` |
-| `STRATEGY_RUNTIME_SYMBOL` | Underlying symbol | `RP, LK` | `NSE:NIFTY50-INDEX` |
-| `STRATEGY_RUNTIME_TIMEFRAME` | Bar timeframe | `RP, BT, LK` | `1m` |
-| `STRATEGY_RUNTIME_STRATEGY` | Strategy module name | `RP, BT, LK` | `nifty_trend_options` |
-| `STRATEGY_RUNTIME_LOT_QUANTITY` | Base lots per trade; set `-1` for auto-lot mode | `RP, BT, LK` | `1` |
-| `STRATEGY_RUNTIME_LOT_SIZE` | Units per lot for the instrument | `RP, BT, LK` | `75` |
-| `STRATEGY_RUNTIME_INITIAL_CAPITAL` | Starting capital (Rs) | `RP, BT, LK` | `100000` |
-| `STRATEGY_RUNTIME_CAPITAL_MODEL` | Position sizing capital mode | `RP, BT, LK` | `non_compounding` |
-| `STRATEGY_RUNTIME_MAX_POSITION_LOTS` | Maximum lots allowed | `RP, LK` | `1` |
-| `STRATEGY_RUNTIME_STOP_LOSS_PCT` | Stop loss % (0.60 = 60%) | `RP, LK` | `0.60` |
-| `STRATEGY_RUNTIME_REPLAY_WS_URL` | Replay engine WebSocket URL | `RP, LK` | `ws://localhost:8765` |
-| `STRATEGY_RUNTIME_REPLAY_SPEED` | Replay speed multiplier | `RP, LK` | `5` |
-| `STRATEGY_RUNTIME_REPLAY_START_TIME` | ISO8601 replay start | `RP, LK` | `2026-04-15T09:15:00+05:30` |
-| `STRATEGY_RUNTIME_REPLAY_END_TIME` | ISO8601 replay end | `RP, LK` | `2026-04-15T15:30:00+05:30` |
+| `runtime.feed_source` | `broker` or `replay_ws` | `RP, LK` | `replay_ws` |
+| `runtime.provider` | Broker provider namespace | `RP, LK` | `fyers` |
+| `runtime.symbol` | Underlying symbol | `RP, LK` | `NSE:NIFTY50-INDEX` |
+| `runtime.timeframe` | Bar timeframe | `RP, BT, LK` | `1m` |
+| `strategy.name` | Strategy module name | `RP, BT, LK` | `nifty_trend_options` |
+| `risk.lot_quantity` | Base lots per trade; set `-1` for auto-lot mode | `RP, BT, LK` | `1` |
+| `risk.lot_size` | Units per lot for the instrument | `RP, BT, LK` | `75` |
+| `risk.initial_capital` | Starting capital (Rs) | `RP, BT, LK` | `100000` |
+| `risk.capital_model` | Position sizing capital mode | `RP, BT, LK` | `non_compounding` |
+| `risk.max_position_lots` | Maximum lots allowed | `RP, LK` | `1` |
+| `risk.stop_loss_pct` | Stop loss % (0.60 = 60%) | `RP, LK` | `0.60` |
+| `replay.ws_url` | Replay engine WebSocket URL | `RP, LK` | `ws://localhost:8765` |
+| `replay.speed` | Replay speed multiplier | `RP, LK` | `5` |
+| `replay.start_time` | ISO8601 replay start | `RP, LK` | `2026-04-15T09:15:00+05:30` |
+| `replay.end_time` | ISO8601 replay end | `RP, LK` | `2026-04-15T15:30:00+05:30` |
 | `STRATEGY_RUNTIME_REPLAY_DATA_TYPE` | Data type streamed by replay engine | `RP, LK` | `ohlcv_1m` or `market_ticks` |
 | `STRATEGY_RUNTIME_INDICATOR_INPUT_MODE` | How indicators receive data | `RP, LK` | `bars_1m` or `ticks` |
 | `TELEGRAM_ENABLED` | Enable Telegram alerts | `RP, LK` | `false` |
@@ -907,7 +918,7 @@ When adding or renaming a strategy runtime config key, update all of the followi
 | `scripts/strategy_backtest.py` | CLI flag → strategy_params mapping |
 | `scripts/strategy_optimize.py` | CLI flag → strategy_params mapping |
 | `scripts/START_BACKTEST_KIT.ps1` | Backtest kit launcher defaults |
-| `config/strategy_runtime.backtest_example.env` | Backtest sample config template |
+| `config/strategy_runtime.backtest_example.json` | Backtest sample config template |
 | `Astra_UserGuide.md` Section 12 table | Applicability reference |
 
 ### config/.env — global credentials
@@ -950,7 +961,7 @@ TELEGRAM_CHAT_ID=123456789
 
 ### Enable per-strategy
 
-In `config\strategy_runtime.paper_replay.env`:
+In `config\strategy_runtime.paper_replay.json`:
 
 ```dotenv
 TELEGRAM_ENABLED=true

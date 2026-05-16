@@ -1,0 +1,46 @@
+﻿{
+    "runtime":  {
+                    "provider":  "upstox",
+                    "log_level":  "INFO",
+                    "timeframe":  "5m",
+                    "symbol":  "NSE_INDEX|Nifty 50",
+                    "trading_provider":  "paper",
+                    "log_file":  "logs/strategy_runtime/runtime.log",
+                    "poll_seconds":  20,
+                    "lookback_bars":  120,
+                    "feed_source":  "broker",
+                    "autostart":  true
+                },
+    "strategy":  {
+                     "indicators":  [
+                                        "ema_20",
+                                        "sma_20",
+                                        "rsi_14",
+                                        "macd"
+                                    ],
+                     "name":  "nifty_trend_options",
+                     "class_path":  ""
+                 },
+    "risk":  {
+                 "max_notional_per_trade":  250000,
+                 "initial_capital":  100000,
+                 "stop_loss_pct":  0.01,
+                 "max_position_lots":  1,
+                 "trailing_stop_pct":  0.015,
+                 "capital_model":  "non_compounding",
+                 "lot_quantity":  1,
+                 "lot_size":  75
+             },
+    "replay":  {
+
+               },
+    "collector":  {
+
+                  },
+    "telegram":  {
+                     "enabled":  false
+                 },
+    "strategy_params":  {
+
+                        }
+}

@@ -30,9 +30,9 @@
     not provided.
 
 .PARAMETER StrategyConfig
-    Path to a strategy env file. Defaults to config/strategy_runtime.backtest_example.env.
+    Path to a strategy JSON file. Defaults to config/strategy_runtime.backtest_example.json.
     Use this to supply per-strategy sizing, capital model, and indicator settings.
-    See config/strategy_runtime.backtest_example.env for all supported keys and comments.
+    See config/strategy_runtime.backtest_example.json for all supported keys and comments.
 
 .PARAMETER OptimizerConfig
     Path to optimizer JSON config used only in optimize mode.
@@ -44,12 +44,12 @@
     .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -Mode optimize -Top 15
     .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -Symbol "NSE_INDEX|Nifty 50"
     .\START_BACKTEST_KIT.ps1 -Smoke -From 2026-04-28 -To 2026-04-28
-    .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -StrategyConfig "config\strategy_runtime.backtest_example.env"
-    .\START_BACKTEST_KIT.ps1 -Mode backtest -From 2026-04-15 -To 2026-04-16 -StrategyConfig "config\strategy_runtime.nifty_trend_options.backtest_bars.env.example"
-    .\START_BACKTEST_KIT.ps1 -Mode backtest -From 2026-04-15 -To 2026-04-16 -StrategyConfig "config\strategy_runtime.nifty_trend_options.backtest_ticks_partial.env.example"
-    .\START_BACKTEST_KIT.ps1 -Mode backtest -From 2026-04-15 -To 2026-04-16 -StrategyConfig "config\strategy_runtime.nifty_trend_options.backtest_ticks_full.env.example"
-    .\START_BACKTEST_KIT.ps1 -Mode optimize -From 2026-04-15 -To 2026-04-16 -Top 10 -StrategyConfig "config\strategy_runtime.nifty_trend_options.optimize_bars.env.example" -OptimizerConfig "config\strategy_optimize_ranges.json"
-    .\START_BACKTEST_KIT.ps1 -Mode optimize -From 2026-04-15 -To 2026-04-16 -Top 10 -StrategyConfig "config\strategy_runtime.nifty_trend_options.optimize_ticks.env.example" -OptimizerConfig "config\strategy_optimize_ranges.json"
+    .\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -StrategyConfig "config\strategy_runtime.backtest_example.json"
+    .\START_BACKTEST_KIT.ps1 -Mode backtest -From 2026-04-15 -To 2026-04-16 -StrategyConfig "config\strategy_runtime.nifty_trend_options.backtest_bars.json.example"
+    .\START_BACKTEST_KIT.ps1 -Mode backtest -From 2026-04-15 -To 2026-04-16 -StrategyConfig "config\strategy_runtime.nifty_trend_options.backtest_ticks_partial.json.example"
+    .\START_BACKTEST_KIT.ps1 -Mode backtest -From 2026-04-15 -To 2026-04-16 -StrategyConfig "config\strategy_runtime.nifty_trend_options.backtest_ticks_full.json.example"
+    .\START_BACKTEST_KIT.ps1 -Mode optimize -From 2026-04-15 -To 2026-04-16 -Top 10 -StrategyConfig "config\strategy_runtime.nifty_trend_options.optimize_bars.json.example" -OptimizerConfig "config\strategy_optimize_ranges.json"
+    .\START_BACKTEST_KIT.ps1 -Mode optimize -From 2026-04-15 -To 2026-04-16 -Top 10 -StrategyConfig "config\strategy_runtime.nifty_trend_options.optimize_ticks.json.example" -OptimizerConfig "config\strategy_optimize_ranges.json"
 #>
 param(
     [string]$From   = "",
@@ -96,7 +96,7 @@ $STRATEGY_RUNTIME_DIR = "$KIT_ROOT\services\strategy_runtime"
 $OFFLINE_ADAPTER_RUNNER = "$STRATEGY_RUNTIME_DIR\offline_adapter\runner.py"
 $RUNTIME_REQUIREMENTS = "$STRATEGY_RUNTIME_DIR\astra-kit-requirements.txt"
 $GLOBAL_ENV  = if ($EnvFile) { if ([System.IO.Path]::IsPathRooted($EnvFile)) { $EnvFile } else { Join-Path $KIT_ROOT $EnvFile } } else { "$KIT_ROOT\config\.env" }
-$STRATEGY_ENV = if ($StrategyConfig) { if ([System.IO.Path]::IsPathRooted($StrategyConfig)) { $StrategyConfig } else { Join-Path $KIT_ROOT $StrategyConfig } } else { "$KIT_ROOT\config\strategy_runtime.backtest_example.env" }
+$STRATEGY_ENV = if ($StrategyConfig) { if ([System.IO.Path]::IsPathRooted($StrategyConfig)) { $StrategyConfig } else { Join-Path $KIT_ROOT $StrategyConfig } } else { "$KIT_ROOT\config\strategy_runtime.backtest_example.json" }
 $OPTIMIZER_CFG = if ($OptimizerConfig) { if ([System.IO.Path]::IsPathRooted($OptimizerConfig)) { $OptimizerConfig } else { Join-Path $KIT_ROOT $OptimizerConfig } } else { "$KIT_ROOT\config\strategy_optimize_ranges.json" }
 
 # ── Banner ─────────────────────────────────────────────────────────────────────
@@ -160,6 +160,93 @@ function Import-EnvFile([string]$Path) {
             $v = $v.Substring(1, $v.Length - 2)
         }
         [Environment]::SetEnvironmentVariable($k, $v, 'Process')
+    }
+}
+
+function Import-StrategyJson([string]$Path) {
+    if (-not (Test-Path $Path)) { return }
+
+    $json = Get-Content -Path $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+
+    if ($null -ne $json.runtime) {
+        foreach ($prop in $json.runtime.PSObject.Properties) {
+            $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
+            switch ($prop.Name) {
+                "feed_source" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_FEED_SOURCE", $value, 'Process') }
+                "provider" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_PROVIDER", $value, 'Process') }
+                "trading_provider" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_TRADING_PROVIDER", $value, 'Process') }
+                "symbol" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_SYMBOL", $value, 'Process') }
+                "timeframe" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_TIMEFRAME", $value, 'Process') }
+                "poll_seconds" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_POLL_SECONDS", $value, 'Process') }
+                "lookback_bars" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_LOOKBACK_BARS", $value, 'Process') }
+                "autostart" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_AUTOSTART", $value, 'Process') }
+                "log_level" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_LOG_LEVEL", $value, 'Process') }
+                "log_file" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_LOG_FILE", $value, 'Process') }
+            }
+        }
+    }
+
+    if ($null -ne $json.strategy) {
+        foreach ($prop in $json.strategy.PSObject.Properties) {
+            $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
+            switch ($prop.Name) {
+                "name" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_STRATEGY", $value, 'Process') }
+                "class_path" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_STRATEGY_CLASS", $value, 'Process') }
+                "indicator_input_mode" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_INDICATOR_INPUT_MODE", $value, 'Process') }
+                "indicators" {
+                    if ($prop.Value -is [System.Array]) {
+                        [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_INDICATORS", (($prop.Value | ForEach-Object { [string]$_ }) -join ','), 'Process')
+                    } else {
+                        [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_INDICATORS", $value, 'Process')
+                    }
+                }
+            }
+        }
+    }
+
+    if ($null -ne $json.risk) {
+        foreach ($prop in $json.risk.PSObject.Properties) {
+            $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
+            switch ($prop.Name) {
+                "lot_quantity" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_LOT_QUANTITY", $value, 'Process') }
+                "lot_size" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_LOT_SIZE", $value, 'Process') }
+                "initial_capital" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_INITIAL_CAPITAL", $value, 'Process') }
+                "capital_model" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_CAPITAL_MODEL", $value, 'Process') }
+                "max_position_lots" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_MAX_POSITION_LOTS", $value, 'Process') }
+                "max_notional_per_trade" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_MAX_NOTIONAL", $value, 'Process') }
+                "stop_loss_pct" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_STOP_LOSS_PCT", $value, 'Process') }
+                "trailing_stop_pct" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_TRAILING_STOP_PCT", $value, 'Process') }
+            }
+        }
+    }
+
+    if ($null -ne $json.replay) {
+        foreach ($prop in $json.replay.PSObject.Properties) {
+            $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
+            switch ($prop.Name) {
+                "ws_url" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_WS_URL", $value, 'Process') }
+                "data_type" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_DATA_TYPE", $value, 'Process') }
+                "speed" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_SPEED", $value, 'Process') }
+                "start_time" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_START_TIME", $value, 'Process') }
+                "end_time" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_END_TIME", $value, 'Process') }
+                "source_table" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_SOURCE_TABLE", $value, 'Process') }
+                "source_data_kind" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_SOURCE_DATA_KIND", $value, 'Process') }
+                "options_source_table" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_OPTIONS_SOURCE_TABLE", $value, 'Process') }
+                "db_chunking_trading_days" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_DB_CHUNKING_TRADING_DAYS", $value, 'Process') }
+                "max_rows_per_chunk" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK", $value, 'Process') }
+            }
+        }
+    }
+
+    if ($null -ne $json.strategy_params) {
+        foreach ($prop in $json.strategy_params.PSObject.Properties) {
+            $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
+            [Environment]::SetEnvironmentVariable($prop.Name, $value, 'Process')
+        }
+    }
+
+    if ($null -ne $json.telegram -and $null -ne $json.telegram.enabled) {
+        [Environment]::SetEnvironmentVariable("TELEGRAM_ENABLED", ([string]$json.telegram.enabled), 'Process')
     }
 }
 
@@ -233,7 +320,7 @@ if (Test-Path $GLOBAL_ENV) {
 }
 
 if (Test-Path $STRATEGY_ENV) {
-    Import-EnvFile $STRATEGY_ENV
+    Import-StrategyJson $STRATEGY_ENV
     Write-Host "[INFO] Loaded strategy config from $STRATEGY_ENV" -ForegroundColor DarkGray
 } else {
     Write-Host "[WARN] Strategy config not found: $STRATEGY_ENV" -ForegroundColor Yellow
@@ -568,46 +655,46 @@ if not database_url:
     raise SystemExit(0)
 
 try:
-        source_schema, source_rel = _parts(source_table)
-        options_schema, options_rel = _parts(options_table)
+    source_schema, source_rel = _parts(source_table)
+    options_schema, options_rel = _parts(options_table)
 
     conn = psycopg2.connect(database_url)
     cur = conn.cursor()
-        if source_kind == "bars" and source_table == "master_broker.ohlcv_1m":
-                q = sql.SQL(
-                        """
-                        SELECT count(*)
-                        FROM {}.{}
-                        WHERE symbol = %s
-                            AND time >= %s::date
-                            AND time < (%s::date + INTERVAL '1 day')
-                            AND master_close IS NOT NULL
-                        """
-                ).format(sql.Identifier(source_schema), sql.Identifier(source_rel))
-        else:
-                q = sql.SQL(
-                        """
-                        SELECT count(*)
-                        FROM {}.{}
-                        WHERE symbol = %s
-                            AND time >= %s::date
-                            AND time < (%s::date + INTERVAL '1 day')
-                        """
-                ).format(sql.Identifier(source_schema), sql.Identifier(source_rel))
-        cur.execute(q, (symbol, from_date, to_date))
+    if source_kind == "bars" and source_table == "master_broker.ohlcv_1m":
+        q = sql.SQL(
+            """
+            SELECT count(*)
+            FROM {}.{}
+            WHERE symbol = %s
+                AND time >= %s::date
+                AND time < (%s::date + INTERVAL '1 day')
+                AND master_close IS NOT NULL
+            """
+        ).format(sql.Identifier(source_schema), sql.Identifier(source_rel))
+    else:
+        q = sql.SQL(
+            """
+            SELECT count(*)
+            FROM {}.{}
+            WHERE symbol = %s
+                AND time >= %s::date
+                AND time < (%s::date + INTERVAL '1 day')
+            """
+        ).format(sql.Identifier(source_schema), sql.Identifier(source_rel))
+    cur.execute(q, (symbol, from_date, to_date))
     index_count = int(cur.fetchone()[0])
 
-        q_opts = sql.SQL(
-                """
-                SELECT count(*)
-                FROM {}.{}
-                WHERE time >= %s::date
-                    AND time < (%s::date + INTERVAL '1 day')
-                    AND close IS NOT NULL
-                    AND close > 0
-                """
-        ).format(sql.Identifier(options_schema), sql.Identifier(options_rel))
-        cur.execute(q_opts, (from_date, to_date))
+    q_opts = sql.SQL(
+        """
+        SELECT count(*)
+        FROM {}.{}
+        WHERE time >= %s::date
+            AND time < (%s::date + INTERVAL '1 day')
+            AND close IS NOT NULL
+            AND close > 0
+        """
+    ).format(sql.Identifier(options_schema), sql.Identifier(options_rel))
+    cur.execute(q_opts, (from_date, to_date))
     options_count = int(cur.fetchone()[0])
 
     cur.close()

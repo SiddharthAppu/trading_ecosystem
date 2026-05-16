@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 import logging
+import os
 
 import uvicorn
 from fastapi import FastAPI, Query
@@ -36,7 +38,12 @@ class RuntimeApiState:
 
     def get_runtime(self) -> StrategyRuntime:
         if self.runtime is None:
-            settings = RuntimeSettings.from_env()
+            config_path = os.getenv("STRATEGY_RUNTIME_CONFIG", "").strip()
+            if not config_path:
+                raise RuntimeError(
+                    "Missing strategy runtime config path. Set STRATEGY_RUNTIME_CONFIG or run with --config."
+                )
+            settings = RuntimeSettings.from_json(config_path)
             configure_logging(settings)
             self.runtime = create_runtime(settings)
         return self.runtime
@@ -178,6 +185,11 @@ async def runtime_config() -> dict:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run Strategy Runtime API")
+    parser.add_argument("--config", required=True, help="Path to strategy runtime JSON config")
+    args = parser.parse_args()
+
+    os.environ["STRATEGY_RUNTIME_CONFIG"] = args.config
     uvicorn.run(
         "services.strategy_runtime.server:app",
         host="0.0.0.0",

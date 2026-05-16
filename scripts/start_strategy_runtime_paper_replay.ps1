@@ -44,6 +44,33 @@ function Read-EnvFile {
     return $loaded
 }
 
+function Read-JsonConfig {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        throw "Config file not found: $Path"
+    }
+
+    $json = Get-Content -Path $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $loaded = @{}
+
+    if ($null -ne $json.runtime) {
+        foreach ($prop in $json.runtime.PSObject.Properties) {
+            $loaded["runtime.$($prop.Name)"] = [string]$prop.Value
+        }
+    }
+
+    if ($null -ne $json.strategy_params) {
+        foreach ($prop in $json.strategy_params.PSObject.Properties) {
+            $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
+            [Environment]::SetEnvironmentVariable($prop.Name, $value, 'Process')
+            $loaded[$prop.Name] = $value
+        }
+    }
+
+    return $loaded
+}
+
 if (-not (Test-Path $PYTHON_EXE)) {
     Write-Error "Missing Python virtual environment at .venv. Expected: $PYTHON_EXE"
     exit 1
@@ -54,9 +81,9 @@ if (-not (Test-Path $RUNTIME_SERVER)) {
     exit 1
 }
 
-$defaultStrategyEnv = Join-Path $ROOT "config\strategy_runtime.$Strategy.paper_replay.env"
-$defaultNiftyReplayEnv = Join-Path $ROOT "config\strategy_runtime.nifty_trend_options.replay_ticks.env.example"
-$defaultGenericEnv = Join-Path $ROOT "config\strategy_runtime.paper_replay.env"
+$defaultStrategyEnv = Join-Path $ROOT "config\strategy_runtime.$Strategy.paper_replay.json"
+$defaultNiftyReplayEnv = Join-Path $ROOT "config\strategy_runtime.nifty_trend_options.replay_ticks.json.example"
+$defaultGenericEnv = Join-Path $ROOT "config\strategy_runtime.paper_replay.json"
 
 if ([string]::IsNullOrWhiteSpace($EnvFile)) {
     if (Test-Path $defaultStrategyEnv) {
@@ -69,7 +96,7 @@ if ([string]::IsNullOrWhiteSpace($EnvFile)) {
         $envPath = $defaultGenericEnv
     }
     else {
-        Write-Error "No env file found. Checked $defaultStrategyEnv, $defaultNiftyReplayEnv and $defaultGenericEnv"
+        Write-Error "No config file found. Checked $defaultStrategyEnv, $defaultNiftyReplayEnv and $defaultGenericEnv"
         exit 1
     }
 }
@@ -77,7 +104,8 @@ else {
     $envPath = if ([System.IO.Path]::IsPathRooted($EnvFile)) { $EnvFile } else { Join-Path $ROOT $EnvFile }
 }
 
-$loadedEnv = Read-EnvFile -Path $envPath
+$loadedEnv = Read-JsonConfig -Path $envPath
+[Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_CONFIG", $envPath, 'Process')
 
 if (-not (Test-Path $LOG_DIR)) {
     New-Item -Path $LOG_DIR -ItemType Directory -Force | Out-Null
@@ -98,7 +126,7 @@ try {
     Write-Host "==============================================="
     Write-Host "Strategy Runtime Paper/Replay Launcher"
     Write-Host "Root:      $ROOT"
-    Write-Host "Env file:  $envPath"
+    Write-Host "Config:    $envPath"
     Write-Host "Python:    $PYTHON_EXE"
     Write-Host "==============================================="
 
@@ -129,7 +157,7 @@ try {
     Write-Host "Starting Strategy Runtime API..."
     Write-Host "Press Ctrl+C to stop."
 
-    & $PYTHON_EXE $RUNTIME_SERVER
+    & $PYTHON_EXE $RUNTIME_SERVER --config $envPath
     $exitCode = $LASTEXITCODE
 }
 finally {

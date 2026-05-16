@@ -1,0 +1,53 @@
+﻿{
+    "runtime":  {
+                    "autostart":  true,
+                    "trading_provider":  "paper",
+                    "lookback_bars":  120,
+                    "log_file":  "logs/strategy_runtime/runtime.log",
+                    "feed_source":  "broker",
+                    "timeframe":  "5m",
+                    "provider":  "upstox",
+                    "log_level":  "INFO",
+                    "symbol":  "NSE_INDEX|Nifty 50",
+                    "poll_seconds":  20
+                },
+    "strategy":  {
+                     "class_path":  "",
+                     "name":  "ema_cross",
+                     "indicators":  [
+                                        "ema_20",
+                                        "sma_20",
+                                        "rsi_14",
+                                        "macd"
+                                    ]
+                 },
+    "risk":  {
+                 "max_notional_per_trade":  250000,
+                 "trailing_stop_pct":  0.015,
+                 "initial_capital":  100000,
+                 "stop_loss_pct":  0.01,
+                 "lot_quantity":  1,
+                 "lot_size":  75,
+                 "capital_model":  "non_compounding",
+                 "max_position_lots":  1
+             },
+    "replay":  {
+
+               },
+    "collector":  {
+                      "events_path":  "/recorder/events",
+                      "provider":  "",
+                      "connect_timeout_seconds":  10,
+                      "base_url":  "http://localhost:8080",
+                      "fallback_policy":  "collector_only",
+                      "stale_timeout_seconds":  45,
+                      "reconnect_seconds":  3
+                  },
+    "telegram":  {
+                     "enabled":  false
+                 },
+    "strategy_params":  {
+                            "ASTRA_RECORDER_ENABLE_FILE":  true,
+                            "ASTRA_RECORDER_ENABLE_DB":  false
+                        }
+}

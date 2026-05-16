@@ -1,0 +1,50 @@
+﻿{
+    "runtime":  {
+                    "log_level":  "INFO",
+                    "autostart":  true,
+                    "lookback_bars":  120,
+                    "log_file":  "logs/strategy_runtime/runtime.log",
+                    "feed_source":  "replay_ws",
+                    "timeframe":  "5m",
+                    "provider":  "fyers",
+                    "symbol":  "NSE:NIFTY50-INDEX",
+                    "poll_seconds":  20
+                },
+    "strategy":  {
+                     "class_path":  "",
+                     "indicator_input_mode":  "bars_1m",
+                     "name":  "ema_cross",
+                     "indicators":  [
+                                        "ema_20",
+                                        "sma_20",
+                                        "rsi_14",
+                                        "macd"
+                                    ]
+                 },
+    "risk":  {
+                 "max_notional_per_trade":  250000,
+                 "stop_loss_pct":  0.01,
+                 "trailing_stop_pct":  0.015,
+                 "initial_capital":  100000,
+                 "lot_quantity":  1,
+                 "lot_size":  75,
+                 "capital_model":  "non_compounding",
+                 "max_position_lots":  1
+             },
+    "replay":  {
+                   "ws_url":  "ws://localhost:8765",
+                   "speed":  5,
+                   "end_time":  "2026-04-30T15:30:00+05:30",
+                   "start_time":  "2026-04-30T09:15:00+05:30",
+                   "data_type":  "market_ticks"
+               },
+    "collector":  {
+
+                  },
+    "telegram":  {
+                     "enabled":  false
+                 },
+    "strategy_params":  {
+
+                        }
+}

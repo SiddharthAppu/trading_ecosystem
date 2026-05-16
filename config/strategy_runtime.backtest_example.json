@@ -1,0 +1,48 @@
+﻿{
+    "runtime":  {
+                    "provider":  "fyers",
+                    "timeframe":  "5m",
+                    "feed_source":  "replay_ws",
+                    "symbol":  "NSE:NIFTY50-INDEX",
+                    "trading_provider":  "paper"
+                },
+    "strategy":  {
+                     "indicators":  [
+                                        "ema_20",
+                                        "sma_20",
+                                        "rsi_14",
+                                        "macd"
+                                    ],
+                     "name":  "ema_cross",
+                     "class_path":  ""
+                 },
+    "risk":  {
+                 "initial_capital":  100000,
+                 "stop_loss_pct":  0.01,
+                 "trailing_stop_pct":  0.015,
+                 "lot_size":  75,
+                 "capital_model":  "non_compounding",
+                 "lot_quantity":  1,
+                 "max_position_lots":  1
+             },
+    "replay":  {
+
+               },
+    "collector":  {
+
+                  },
+    "telegram":  {
+                     "enabled":  false
+                 },
+    "strategy_params":  {
+                            "NIFTY_MACD_FAST":  9,
+                            "NIFTY_PREMIUM_TOLERANCE":  60,
+                            "NIFTY_EMA_PERIOD":  20,
+                            "NIFTY_MACD_SLOW":  21,
+                            "NIFTY_SMA_PERIOD":  20,
+                            "NIFTY_MACD_SIGNAL":  7,
+                            "NIFTY_RSI_PERIOD":  14,
+                            "NIFTY_TARGET_PREMIUM":  200,
+                            "NIFTY_STOP_LOSS_PREMIUM_PCT":  0.35
+                        }
+}

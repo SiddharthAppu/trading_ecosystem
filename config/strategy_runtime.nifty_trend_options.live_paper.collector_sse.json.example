@@ -1,0 +1,83 @@
+{
+  "_meta": {
+    "mode": "live-paper",
+    "data_channel": "collector_sse",
+    "execution": "paper (simulated orders, no real trades placed)",
+    "strategy": "nifty_trend_options",
+    "description": "Live market data received over a Server-Sent Events (SSE) stream from the data_collector service. Orders are simulated via the paper trading engine — no real money is at risk. Use this mode to validate strategy behaviour against live prices using the collector pipeline before enabling live execution. The data_collector service must be running and streaming before the strategy starts. Credentials (DATABASE_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID) are loaded from config/.env — do NOT put secrets in this file.",
+    "required_services": "data_collector (port 8080) must be running and streaming market data.",
+    "launch_command": ".\\scripts\\start_live_capture_and_strategy.ps1 -StrategyEnv config\\strategy_runtime.nifty_trend_options.live_paper.collector_sse.json.example"
+  },
+  "runtime": {
+    "feed_source": "collector_sse",
+    "provider": "upstox",
+    "trading_provider": "paper",
+    "symbol": "NSE_INDEX|Nifty 50",
+    "timeframe": "5m",
+    "poll_seconds": 20,
+    "lookback_bars": 120,
+    "autostart": true,
+    "log_level": "INFO",
+    "log_file": "logs/strategy_runtime/runtime.log"
+  },
+  "strategy": {
+    "name": "nifty_trend_options",
+    "class_path": "",
+    "indicators": ["ema_20", "sma_20", "rsi_14", "macd"],
+    "indicator_input_mode": "bars_1m"
+  },
+  "risk": {
+    "lot_quantity": 1,
+    "lot_size": 75,
+    "initial_capital": 100000,
+    "capital_model": "non_compounding",
+    "max_position_lots": 1,
+    "max_notional_per_trade": 250000,
+    "stop_loss_pct": 0.01,
+    "trailing_stop_pct": 0.015
+  },
+  "replay": {
+    "_note": "replay section is not used when feed_source=collector_sse. All values are defaults shown for reference.",
+    "ws_url": "ws://localhost:8765",
+    "data_type": "ohlcv_1m",
+    "speed": 5,
+    "start_time": "",
+    "end_time": "",
+    "source_table": "",
+    "source_data_kind": "",
+    "options_source_table": "",
+    "db_chunking_trading_days": 1,
+    "max_rows_per_chunk": 100000
+  },
+  "collector": {
+    "base_url": "http://localhost:8080",
+    "events_path": "/recorder/events",
+    "provider": "upstox",
+    "connect_timeout_seconds": 10,
+    "reconnect_seconds": 3,
+    "stale_timeout_seconds": 45,
+    "fallback_policy": "collector_only"
+  },
+  "telegram": {
+    "enabled": false
+  },
+  "strategy_params": {
+    "NIFTY_UNDERLYING_SYMBOL": "NSE_INDEX|Nifty 50",
+    "NIFTY_ENTRY_START_TIME_IST": "09:30",
+    "NIFTY_ENTRY_END_TIME_IST": "15:00",
+    "NIFTY_FORCE_EXIT_TIME_IST": "15:00",
+    "NIFTY_FORCE_EXIT_1500_ENABLED": false,
+    "NIFTY_FORCE_EXIT_DEBUG_ENABLED": false,
+    "NIFTY_FORCE_EXIT_DEBUG_TO_JOURNAL": false,
+    "NIFTY_OPTION_EXPIRY": "",
+    "NIFTY_TARGET_PREMIUM": 200,
+    "NIFTY_PREMIUM_TOLERANCE": 50,
+    "NIFTY_STRIKE_SCAN_COUNT": 10,
+    "NIFTY_STOP_LOSS_PREMIUM_PCT": 0.5,
+    "NIFTY_EMA_PERIOD": 20,
+    "NIFTY_SMA_PERIOD": 20,
+    "NIFTY_MACD_FAST": 12,
+    "NIFTY_MACD_SLOW": 26,
+    "NIFTY_MACD_SIGNAL": 9
+  }
+}

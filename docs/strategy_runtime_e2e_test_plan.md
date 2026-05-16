@@ -27,8 +27,10 @@ It also includes regression checks for replay/backtest/optimize so rollout does 
 3. Valid broker auth token is present.
 4. Database connectivity is healthy (`DATABASE_URL` resolves and connects).
 
-## New Environment Variables (Live Runtime)
-Set these only when using collector-based live feed.
+## JSON Config Notes (Live Runtime)
+Live runtime strategy settings are now loaded from JSON config files (for example, `config/strategy_runtime.nifty_trend_options.live_collector_sse.json.example`).
+
+Set these values in the JSON file only when using collector-based live feed.
 
 - `STRATEGY_RUNTIME_FEED_SOURCE=collector_sse`
 - `STRATEGY_RUNTIME_COLLECTOR_BASE_URL=http://localhost:8080`
@@ -40,8 +42,7 @@ Set these only when using collector-based live feed.
 - `STRATEGY_RUNTIME_COLLECTOR_FALLBACK_POLICY=collector_only`
   - valid values: `collector_only`, `fallback_to_broker`
 
-Default behavior remains:
-- `STRATEGY_RUNTIME_FEED_SOURCE=broker`
+Default behavior remains: `runtime.feed_source=broker`
 
 ## Test Matrix
 1. Live baseline: broker feed (default)
@@ -120,9 +121,14 @@ Validate reconnect/fallback behavior.
 Ensure replay path remains unchanged.
 
 ### Steps
-1. Set `STRATEGY_RUNTIME_FEED_SOURCE=replay_ws`.
-2. Run a known replay window.
-3. Verify runtime completes normally.
+1. Use replay config with `runtime.feed_source=replay_ws`.
+2. Launch with:
+
+```powershell
+powershell -File scripts/start_strategy_runtime_paper_replay.ps1 -Strategy nifty_trend_options -EnvFile config/strategy_runtime.nifty_trend_options.replay_ticks.json.example
+```
+
+3. Run a known replay window and verify runtime completes normally.
 
 ### Pass Criteria
 - Replay starts/finishes as before.
@@ -135,10 +141,10 @@ Ensure replay path remains unchanged.
 Ensure bars-source backtests still work.
 
 ### Steps
-Run a short-range command:
+Run a short-range command with JSON strategy config:
 
 ```powershell
-.venv/Scripts/python.exe scripts/strategy_backtest.py --from 2026-04-15 --to 2026-04-16 --source-table master_broker.ohlcv_1m --source-data-kind bars --options-source-table master_broker.options_ohlc_1m_fromupstox --db-chunking-trading-days 2 --max-rows-per-chunk 100000
+.\scripts\START_BACKTEST_KIT.ps1 -Mode backtest -From 2026-04-15 -To 2026-04-16 -StrategyConfig "config\strategy_runtime.nifty_trend_options.backtest_bars.json.example"
 ```
 
 ### Pass Criteria
@@ -152,10 +158,10 @@ Run a short-range command:
 Ensure ticks-source backtests still work.
 
 ### Steps
-Run a short-range command:
+Run a short-range command with JSON strategy config:
 
 ```powershell
-.venv/Scripts/python.exe scripts/strategy_backtest.py --from 2026-04-15 --to 2026-04-16 --source-table broker_upstox.market_ticks --source-data-kind ticks --options-source-table master_broker.options_ohlc_1m_fromupstox --db-chunking-trading-days 2 --max-rows-per-chunk 100000
+.\scripts\START_BACKTEST_KIT.ps1 -Mode backtest -From 2026-04-15 -To 2026-04-16 -StrategyConfig "config\strategy_runtime.nifty_trend_options.backtest_ticks_partial.json.example"
 ```
 
 ### Pass Criteria
@@ -170,7 +176,7 @@ Ensure optimizer bars flow remains intact.
 
 ### Steps
 ```powershell
-.venv/Scripts/python.exe scripts/strategy_optimize.py --from 2026-04-15 --to 2026-04-16 --source-table master_broker.ohlcv_1m --source-data-kind bars --options-source-table master_broker.options_ohlc_1m_fromupstox --db-chunking-trading-days 2 --max-rows-per-chunk 100000 --max-combos 1 --min-trades 0 --top 1
+.\scripts\START_BACKTEST_KIT.ps1 -Mode optimize -From 2026-04-15 -To 2026-04-16 -Top 1 -StrategyConfig "config\strategy_runtime.nifty_trend_options.optimize_bars.json.example" -OptimizerConfig "config\strategy_optimize_ranges.json"
 ```
 
 ### Pass Criteria
@@ -185,7 +191,7 @@ Ensure optimizer ticks flow remains intact.
 
 ### Steps
 ```powershell
-.venv/Scripts/python.exe scripts/strategy_optimize.py --from 2026-04-15 --to 2026-04-16 --index-symbol "NSE_INDEX|Nifty 50" --source-table broker_upstox.market_ticks --source-data-kind ticks --options-source-table master_broker.options_ohlc_1m_fromupstox --db-chunking-trading-days 2 --max-rows-per-chunk 100000 --max-combos 1 --min-trades 0 --top 1
+.\scripts\START_BACKTEST_KIT.ps1 -Mode optimize -From 2026-04-15 -To 2026-04-16 -Top 1 -StrategyConfig "config\strategy_runtime.nifty_trend_options.optimize_ticks.json.example" -OptimizerConfig "config\strategy_optimize_ranges.json"
 ```
 
 ### Pass Criteria
@@ -203,6 +209,53 @@ Ensure optimizer ticks flow remains intact.
    - Expected: startup fails with clear config error.
 3. Collector unavailable + collector_only:
    - Expected: retry behavior, no process crash.
+
+## Scenario 9: Valid JSON Loads
+### Goal
+Verify runtime starts when given a valid JSON config.
+
+### Steps
+1. Run:
+
+```powershell
+.venv/Scripts/python.exe services/strategy_runtime/main.py --config config/strategy_runtime.nifty_trend_options.backtest.json
+```
+
+### Pass Criteria
+- Runtime starts configuration parsing without JSON/config errors.
+
+## Scenario 10: Missing Required Replay Field
+### Goal
+Ensure missing replay-required values fail fast.
+
+### Steps
+1. Copy a replay JSON config and remove `replay.source_table`.
+2. Run runtime with that config.
+
+### Pass Criteria
+- Startup fails with a clear `Missing required config: STRATEGY_RUNTIME_SOURCE_TABLE` error.
+
+## Scenario 11: Invalid JSON Syntax
+### Goal
+Ensure malformed JSON gives a clear parse error.
+
+### Steps
+1. Introduce a trailing comma or broken brace in a copy of a JSON config.
+2. Run runtime with that config.
+
+### Pass Criteria
+- Startup fails with `Invalid JSON in runtime config ...`.
+
+## Scenario 12: strategy_params Bridge
+### Goal
+Verify `strategy_params` keys are bridged into `os.environ`.
+
+### Steps
+1. Set `strategy_params.NIFTY_EMA_PERIOD` to a distinct value in JSON.
+2. Start runtime and inspect logs/behavior that reflect EMA period.
+
+### Pass Criteria
+- Strategy consumes the JSON value without direct strategy code changes.
 
 ## Rollback Procedure
 1. Force old behavior:

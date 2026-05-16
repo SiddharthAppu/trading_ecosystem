@@ -1,0 +1,49 @@
+﻿{
+    "runtime":  {
+                    "trading_provider":  "paper",
+                    "feed_source":  "replay_ws",
+                    "timeframe":  "5m",
+                    "provider":  "upstox",
+                    "symbol":  "NSE:NIFTY50-INDEX"
+                },
+    "strategy":  {
+                     "class_path":  "",
+                     "name":  "nifty_trend_options",
+                     "indicators":  [
+                                        "ema_20",
+                                        "sma_20",
+                                        "macd"
+                                    ]
+                 },
+    "risk":  {
+                 "stop_loss_pct":  0.01,
+                 "initial_capital":  100000,
+                 "trailing_stop_pct":  0.015,
+                 "lot_quantity":  1,
+                 "lot_size":  75,
+                 "capital_model":  "non_compounding",
+                 "max_position_lots":  1
+             },
+    "replay":  {
+
+               },
+    "collector":  {
+
+                  },
+    "telegram":  {
+                     "enabled":  false
+                 },
+    "strategy_params":  {
+                            "NIFTY_UNDERLYING_SYMBOL":  "NSE_INDEX|Nifty 50",
+                            "NIFTY_TARGET_PREMIUM":  200,
+                            "NIFTY_SMA_PERIOD":  20,
+                            "NIFTY_STOP_LOSS_PREMIUM_PCT":  0.35,
+                            "NIFTY_STRIKE_SCAN_COUNT":  10,
+                            "NIFTY_MACD_SLOW":  26,
+                            "NIFTY_MACD_SIGNAL":  9,
+                            "NIFTY_EMA_PERIOD":  20,
+                            "NIFTY_OPTION_EXPIRY":  "",
+                            "NIFTY_MACD_FAST":  12,
+                            "NIFTY_PREMIUM_TOLERANCE":  60
+                        }
+}

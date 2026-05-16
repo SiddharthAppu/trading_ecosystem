@@ -62,6 +62,7 @@ To add a new strategy:
 
 ## 🧪 Backtest Kit Notes
 - For standalone replay/backtest/live kit operation, use [Astra_UserGuide.md](Astra_UserGuide.md).
+- Strategy runtime kit configs are JSON files under `config/strategy_runtime*.json` (`.env` strategy configs are legacy).
 - Backtest optimize artifacts are generated under `logs/strategy_runtime/` and `logs/run_summaries/` in the kit directory.
 - If present in kit root, open these pages for quick navigation:
     - `ARTIFACT_INDEX.html` (all artifacts)

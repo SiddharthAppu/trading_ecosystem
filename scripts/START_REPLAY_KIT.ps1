@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     Starts the replay engine and strategy runtime together using kit-local paths.
-    Uses config/strategy_runtime.paper_replay.env for strategy settings.
+    Uses config/strategy_runtime.paper_replay.json for strategy settings.
     Prints a full preflight summary (config, paths, DB, expected behavior) before launch.
     Polls /status every 5 seconds and shows live color-coded progress while replay runs.
     Writes a per-run summary log to logs/run_summaries/.
@@ -54,7 +54,7 @@ $KIT_ROOT    = $PSScriptRoot
 $PYTHON_EXE  = "$KIT_ROOT\.venv\Scripts\python.exe"
 $RUNTIME_SRV = "$KIT_ROOT\services\strategy_runtime\server.py"
 $REPLAY_MAIN  = "$KIT_ROOT\services\replay_engine\main.py"
-$ENV_FILE     = if ($EnvFile) { if ([System.IO.Path]::IsPathRooted($EnvFile)) { $EnvFile } else { Join-Path $KIT_ROOT $EnvFile } } else { "$KIT_ROOT\config\strategy_runtime.paper_replay.env" }
+$ENV_FILE     = if ($EnvFile) { if ([System.IO.Path]::IsPathRooted($EnvFile)) { $EnvFile } else { Join-Path $KIT_ROOT $EnvFile } } else { "$KIT_ROOT\config\strategy_runtime.paper_replay.json" }
 $GLOBAL_ENV   = if ($GlobalEnv) { if ([System.IO.Path]::IsPathRooted($GlobalEnv)) { $GlobalEnv } else { Join-Path $KIT_ROOT $GlobalEnv } } else { "$KIT_ROOT\config\.env" }
 $LOG_DIR      = "$KIT_ROOT\logs"
 $RUN_SUMMARY_DIR = "$LOG_DIR\run_summaries"
@@ -87,9 +87,9 @@ if (-not (Test-Path $RUNTIME_SRV)) {
 }
 
 if (-not (Test-Path $ENV_FILE)) {
-    Write-Host "[WARN] Env file not found: $ENV_FILE" -ForegroundColor Yellow
+    Write-Host "[WARN] Config file not found: $ENV_FILE" -ForegroundColor Yellow
     Write-Host "       Copying from example..." -ForegroundColor Yellow
-    $example = "$KIT_ROOT\config\strategy_runtime.paper_replay.env.example"
+    $example = "$KIT_ROOT\config\strategy_runtime.paper_replay.json.example"
     if (Test-Path $example) {
         Copy-Item $example $ENV_FILE
         Write-Host "       Created $ENV_FILE - please edit it before running." -ForegroundColor Green
@@ -115,6 +115,46 @@ function Load-EnvFile([string]$Path) {
             $v = $v.Substring(1, $v.Length - 2)
         }
         [Environment]::SetEnvironmentVariable($k, $v, 'Process')
+    }
+}
+
+function Load-StrategyJsonFile([string]$Path) {
+    if (-not (Test-Path $Path)) {
+        throw "Config file not found: $Path"
+    }
+
+    $json = Get-Content -Path $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+
+    if ($null -ne $json.runtime) {
+        foreach ($prop in $json.runtime.PSObject.Properties) {
+            $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
+            switch ($prop.Name) {
+                "feed_source" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_FEED_SOURCE", $value, 'Process') }
+                "provider" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_PROVIDER", $value, 'Process') }
+                "symbol" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_SYMBOL", $value, 'Process') }
+                "timeframe" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_TIMEFRAME", $value, 'Process') }
+            }
+        }
+    }
+
+    if ($null -ne $json.replay) {
+        foreach ($prop in $json.replay.PSObject.Properties) {
+            $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
+            switch ($prop.Name) {
+                "data_type" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_DATA_TYPE", $value, 'Process') }
+                "speed" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_SPEED", $value, 'Process') }
+                "start_time" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_START_TIME", $value, 'Process') }
+                "end_time" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_END_TIME", $value, 'Process') }
+                "ws_url" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_WS_URL", $value, 'Process') }
+            }
+        }
+    }
+
+    if ($null -ne $json.strategy_params) {
+        foreach ($prop in $json.strategy_params.PSObject.Properties) {
+            $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
+            [Environment]::SetEnvironmentVariable($prop.Name, $value, 'Process')
+        }
     }
 }
 
@@ -250,7 +290,8 @@ function Write-EndSummary($FinalStatus, [int]$ExitCode) {
 
 # ── Load env files ─────────────────────────────────────────────────────────────
 if (Test-Path $GLOBAL_ENV) { Load-EnvFile $GLOBAL_ENV }
-Load-EnvFile $ENV_FILE
+Load-StrategyJsonFile $ENV_FILE
+[Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_CONFIG", $ENV_FILE, 'Process')
 
 # Override date if supplied via param
 if ($Date -ne "") {
@@ -343,7 +384,7 @@ Write-RunSummary "  Kit Root            : $KIT_ROOT"           "White"
 Write-RunSummary "  Python Exe          : $PYTHON_EXE"         "White"
 Write-RunSummary "  Runtime Server      : $RUNTIME_SRV"        "White"
 Write-RunSummary "  Replay Engine Main  : $REPLAY_MAIN"        "White"
-Write-RunSummary "  Strategy Env File   : $ENV_FILE"           "White"
+Write-RunSummary "  Strategy Config File: $ENV_FILE"           "White"
 Write-RunSummary "  Global Env File     : $GLOBAL_ENV"         "White"
 Write-RunSummary "  Log Dir             : $LOG_DIR"            "White"
 Write-RunSummary "  Run Summary File    : $RUN_SUMMARY_FILE"   "White"
@@ -476,7 +517,7 @@ try {
     Push-Location $KIT_ROOT
     $launchStartedAt = Get-Date
     $runtimeProc = Start-Process -FilePath $PYTHON_EXE `
-        -ArgumentList $RUNTIME_SRV `
+        -ArgumentList @($RUNTIME_SRV, "--config", $ENV_FILE) `
         -WorkingDirectory $KIT_ROOT `
         -PassThru `
         -NoNewWindow `

@@ -52,6 +52,40 @@ function Read-EnvFile {
     return $loaded
 }
 
+function Read-JsonConfig {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        throw "Config file not found: $Path"
+    }
+
+    $json = Get-Content -Path $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $loaded = @{}
+
+    if ($null -ne $json.runtime) {
+        foreach ($prop in $json.runtime.PSObject.Properties) {
+            $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
+            $loaded["runtime.$($prop.Name)"] = $value
+            switch ($prop.Name) {
+                "feed_source" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_FEED_SOURCE", $value, 'Process') }
+                "provider" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_PROVIDER", $value, 'Process') }
+                "trading_provider" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_TRADING_PROVIDER", $value, 'Process') }
+                "timeframe" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_TIMEFRAME", $value, 'Process') }
+            }
+        }
+    }
+
+    if ($null -ne $json.strategy_params) {
+        foreach ($prop in $json.strategy_params.PSObject.Properties) {
+            $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
+            [Environment]::SetEnvironmentVariable($prop.Name, $value, 'Process')
+            $loaded[$prop.Name] = $value
+        }
+    }
+
+    return $loaded
+}
+
 if (-not (Test-Path $PYTHON_EXE)) {
     Write-Error "Missing Python virtual environment at .venv. Expected: $PYTHON_EXE"
     exit 1
@@ -67,9 +101,9 @@ if (-not (Test-Path $AUTH_HELPER)) {
     exit 1
 }
 
-$defaultStrategyEnv = Join-Path $ROOT "config\strategy_runtime.$Strategy.paper_live.env"
-$defaultNiftyBrokerEnv = Join-Path $ROOT "config\strategy_runtime.nifty_trend_options.live_broker.env.example"
-$defaultGenericEnv = Join-Path $ROOT "config\strategy_runtime.paper_live.env"
+$defaultStrategyEnv = Join-Path $ROOT "config\strategy_runtime.$Strategy.paper_live.json"
+$defaultNiftyBrokerEnv = Join-Path $ROOT "config\strategy_runtime.nifty_trend_options.live_broker.json.example"
+$defaultGenericEnv = Join-Path $ROOT "config\strategy_runtime.paper_live.json"
 
 if ([string]::IsNullOrWhiteSpace($EnvFile)) {
     if (Test-Path $defaultStrategyEnv) {
@@ -82,7 +116,7 @@ if ([string]::IsNullOrWhiteSpace($EnvFile)) {
         $envPath = $defaultGenericEnv
     }
     else {
-        Write-Error "No env file found. Checked $defaultStrategyEnv, $defaultNiftyBrokerEnv and $defaultGenericEnv"
+        Write-Error "No config file found. Checked $defaultStrategyEnv, $defaultNiftyBrokerEnv and $defaultGenericEnv"
         exit 1
     }
 }
@@ -90,7 +124,8 @@ else {
     $envPath = if ([System.IO.Path]::IsPathRooted($EnvFile)) { $EnvFile } else { Join-Path $ROOT $EnvFile }
 }
 
-$loadedEnv = Read-EnvFile -Path $envPath
+$loadedEnv = Read-JsonConfig -Path $envPath
+[Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_CONFIG", $envPath, 'Process')
 
 if (-not (Test-Path $LOG_DIR)) {
     New-Item -Path $LOG_DIR -ItemType Directory -Force | Out-Null
@@ -128,7 +163,7 @@ if ($feedSource -eq "collector_sse") {
 Write-Host "==============================================="
 Write-Host "Strategy Runtime Live Paper Launcher"
 Write-Host "Root:      $ROOT"
-Write-Host "Env file:  $envPath"
+Write-Host "Config:    $envPath"
 Write-Host "Python:    $PYTHON_EXE"
 Write-Host "Auth dir:  $AUTH_DIR"
 Write-Host "==============================================="
@@ -166,7 +201,7 @@ Write-Host ""
 Write-Host "Starting Strategy Runtime API in live-paper mode..."
 Write-Host "Press Ctrl+C to stop."
 
-& $PYTHON_EXE $RUNTIME_SERVER
+& $PYTHON_EXE $RUNTIME_SERVER --config $envPath
 $exitCode = $LASTEXITCODE
 
 if ($exitCode -ne 0) {

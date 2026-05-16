@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -34,10 +35,18 @@ def _load_global_env() -> None:
 _load_global_env()
 
 
-def _parse_csv(raw_value: str, default: list[str]) -> list[str]:
-    if not raw_value:
+def _parse_csv(raw_value: object, default: list[str]) -> list[str]:
+    if raw_value is None:
         return default
-    return [item.strip() for item in raw_value.split(",") if item.strip()]
+    if isinstance(raw_value, list):
+        values = [str(item).strip() for item in raw_value if str(item).strip()]
+        return values or default
+    if isinstance(raw_value, str):
+        value = raw_value.strip()
+        if not value:
+            return default
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return default
 
 
 def _parse_indicator_input_mode(raw_value: str | None) -> str:
@@ -47,22 +56,53 @@ def _parse_indicator_input_mode(raw_value: str | None) -> str:
     return "bars_1m"
 
 
-def _require_env(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value:
-        raise RuntimeConfigError(f"Missing required config: {name}")
-    return value
-
-
-def _parse_positive_int(name: str) -> int:
-    raw_value = _require_env(name)
+def _parse_positive_int(raw_value: object, name: str) -> int:
     try:
-        value = int(raw_value)
+        value = int(raw_value)  # type: ignore[arg-type]
     except ValueError as exc:
+        raise RuntimeConfigError(f"Invalid integer for {name}: {raw_value}") from exc
+    except TypeError as exc:
         raise RuntimeConfigError(f"Invalid integer for {name}: {raw_value}") from exc
     if value <= 0:
         raise RuntimeConfigError(f"{name} must be greater than 0")
     return value
+
+
+def _parse_int(raw_value: object, default: int, name: str) -> int:
+    if raw_value is None:
+        return default
+    if isinstance(raw_value, str) and not raw_value.strip():
+        return default
+    try:
+        return int(raw_value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise RuntimeConfigError(f"Invalid integer for {name}: {raw_value}") from exc
+
+
+def _parse_float(raw_value: object, default: float, name: str) -> float:
+    if raw_value is None:
+        return default
+    if isinstance(raw_value, str) and not raw_value.strip():
+        return default
+    try:
+        return float(raw_value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise RuntimeConfigError(f"Invalid number for {name}: {raw_value}") from exc
+
+
+def _parse_bool(raw_value: object, default: bool) -> bool:
+    if raw_value is None:
+        return default
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, (int, float)):
+        return bool(raw_value)
+    value = str(raw_value).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _normalize_source_data_kind(raw_value: str) -> str:
@@ -160,75 +200,121 @@ class RuntimeSettings:
             raise RuntimeConfigError("Missing required config: STRATEGY_RUNTIME_OPTIONS_SOURCE_TABLE")
 
     @classmethod
-    def from_env(cls) -> "RuntimeSettings":
-        capital_model = os.getenv("STRATEGY_RUNTIME_CAPITAL_MODEL", "non_compounding").strip().lower()
+    def from_json(cls, path: str) -> "RuntimeSettings":
+        try:
+            with open(path, "r", encoding="utf-8-sig") as handle:
+                payload = json.load(handle)
+        except FileNotFoundError as exc:
+            raise RuntimeConfigError(f"Strategy runtime config not found: {path}") from exc
+        except json.JSONDecodeError as exc:
+            raise RuntimeConfigError(f"Invalid JSON in runtime config {path}: {exc}") from exc
+
+        if not isinstance(payload, dict):
+            raise RuntimeConfigError("Runtime config root must be a JSON object")
+
+        runtime = payload.get("runtime", {})
+        strategy = payload.get("strategy", {})
+        risk = payload.get("risk", {})
+        replay = payload.get("replay", {})
+        collector = payload.get("collector", {})
+        telegram = payload.get("telegram", {})
+        strategy_params = payload.get("strategy_params", {})
+
+        for section_name, section in (
+            ("runtime", runtime),
+            ("strategy", strategy),
+            ("risk", risk),
+            ("replay", replay),
+            ("collector", collector),
+            ("telegram", telegram),
+            ("strategy_params", strategy_params),
+        ):
+            if not isinstance(section, dict):
+                raise RuntimeConfigError(f"Section '{section_name}' must be a JSON object")
+
+        for key, value in strategy_params.items():
+            os.environ[str(key)] = "" if value is None else str(value)
+
+        capital_model = str(risk.get("capital_model", "non_compounding")).strip().lower()
         if capital_model not in {"non_compounding", "compounding"}:
             capital_model = "non_compounding"
 
         settings = cls(
-            feed_source=_normalize_feed_source(os.getenv("STRATEGY_RUNTIME_FEED_SOURCE", "broker")),
-            provider=os.getenv("STRATEGY_RUNTIME_PROVIDER", "upstox").strip().lower(),
-            trading_provider=os.getenv("STRATEGY_RUNTIME_TRADING_PROVIDER", "").strip().lower(),
-            symbol=os.getenv("STRATEGY_RUNTIME_SYMBOL", "NSE_INDEX|Nifty 50").strip(),
-            timeframe=os.getenv("STRATEGY_RUNTIME_TIMEFRAME", "1m").strip().lower(),
-            polling_interval_seconds=int(os.getenv("STRATEGY_RUNTIME_POLL_SECONDS", "20")),
-            lookback_bars=int(os.getenv("STRATEGY_RUNTIME_LOOKBACK_BARS", "120")),
-            strategy_name=os.getenv("STRATEGY_RUNTIME_STRATEGY", "ema_cross").strip().lower(),
-            strategy_class_path=os.getenv("STRATEGY_RUNTIME_STRATEGY_CLASS", "").strip(),
-            lot_quantity=int(os.getenv("STRATEGY_RUNTIME_LOT_QUANTITY", "1")),
-            lot_size=int(os.getenv("STRATEGY_RUNTIME_LOT_SIZE", "1")),
-            initial_capital=float(os.getenv("STRATEGY_RUNTIME_INITIAL_CAPITAL", "100000")),
-            max_position_lots=int(os.getenv("STRATEGY_RUNTIME_MAX_POSITION_LOTS", "1")),
+            feed_source=_normalize_feed_source(str(runtime.get("feed_source", "broker"))),
+            provider=str(runtime.get("provider", "upstox")).strip().lower(),
+            trading_provider=str(runtime.get("trading_provider", "")).strip().lower(),
+            symbol=str(runtime.get("symbol", "NSE_INDEX|Nifty 50")).strip(),
+            timeframe=str(runtime.get("timeframe", "1m")).strip().lower(),
+            polling_interval_seconds=_parse_int(
+                runtime.get("poll_seconds"),
+                20,
+                "runtime.poll_seconds",
+            ),
+            lookback_bars=_parse_int(runtime.get("lookback_bars"), 120, "runtime.lookback_bars"),
+            strategy_name=str(strategy.get("name", "ema_cross")).strip().lower(),
+            strategy_class_path=str(strategy.get("class_path", "")).strip(),
+            lot_quantity=_parse_int(risk.get("lot_quantity"), 1, "risk.lot_quantity"),
+            lot_size=_parse_int(risk.get("lot_size"), 1, "risk.lot_size"),
+            initial_capital=_parse_float(risk.get("initial_capital"), 100000.0, "risk.initial_capital"),
+            max_position_lots=_parse_int(risk.get("max_position_lots"), 1, "risk.max_position_lots"),
             capital_model=capital_model,
-            max_notional_per_trade=float(os.getenv("STRATEGY_RUNTIME_MAX_NOTIONAL", "250000")),
-            stop_loss_pct=float(os.getenv("STRATEGY_RUNTIME_STOP_LOSS_PCT", "0.01")),
-            trailing_stop_pct=float(os.getenv("STRATEGY_RUNTIME_TRAILING_STOP_PCT", "0.015")),
-            indicators=_parse_csv(
-                os.getenv("STRATEGY_RUNTIME_INDICATORS", "ema_20,sma_20,rsi_14,macd"),
-                ["ema_20", "sma_20", "rsi_14", "macd"],
+            max_notional_per_trade=_parse_float(
+                risk.get("max_notional_per_trade"),
+                250000.0,
+                "risk.max_notional_per_trade",
             ),
+            stop_loss_pct=_parse_float(risk.get("stop_loss_pct"), 0.01, "risk.stop_loss_pct"),
+            trailing_stop_pct=_parse_float(
+                risk.get("trailing_stop_pct"),
+                0.015,
+                "risk.trailing_stop_pct",
+            ),
+            indicators=_parse_csv(strategy.get("indicators"), ["ema_20", "sma_20", "rsi_14", "macd"]),
             indicator_input_mode=_parse_indicator_input_mode(
-                os.getenv("STRATEGY_RUNTIME_INDICATOR_INPUT_MODE", "bars_1m")
+                str(strategy.get("indicator_input_mode", "bars_1m"))
             ),
-            telegram_enabled=os.getenv("TELEGRAM_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
+            telegram_enabled=_parse_bool(telegram.get("enabled"), False),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
-            log_level=os.getenv("STRATEGY_RUNTIME_LOG_LEVEL", "INFO").strip().upper(),
-            log_file=os.getenv("STRATEGY_RUNTIME_LOG_FILE", "logs/strategy_runtime/runtime.log").strip(),
-            autostart=os.getenv("STRATEGY_RUNTIME_AUTOSTART", "true").strip().lower() in {"1", "true", "yes", "on"},
-            replay_ws_url=os.getenv("STRATEGY_RUNTIME_REPLAY_WS_URL", "ws://localhost:8765").strip(),
-            replay_data_type=os.getenv("STRATEGY_RUNTIME_REPLAY_DATA_TYPE", "ohlcv_1m").strip(),
-            replay_speed=float(os.getenv("STRATEGY_RUNTIME_REPLAY_SPEED", "5.0")),
-            replay_start_time=os.getenv("STRATEGY_RUNTIME_REPLAY_START_TIME", "").strip(),
-            replay_end_time=os.getenv("STRATEGY_RUNTIME_REPLAY_END_TIME", "").strip(),
-            collector_base_url=os.getenv("STRATEGY_RUNTIME_COLLECTOR_BASE_URL", "http://localhost:8080").strip(),
-            collector_events_path=os.getenv("STRATEGY_RUNTIME_COLLECTOR_EVENTS_PATH", "/recorder/events").strip(),
-            collector_provider=os.getenv("STRATEGY_RUNTIME_COLLECTOR_PROVIDER", "").strip().lower(),
-            collector_connect_timeout_seconds=int(
-                os.getenv("STRATEGY_RUNTIME_COLLECTOR_CONNECT_TIMEOUT_SECONDS", "10")
+            log_level=str(runtime.get("log_level", "INFO")).strip().upper(),
+            log_file=str(runtime.get("log_file", "logs/strategy_runtime/runtime.log")).strip(),
+            autostart=_parse_bool(runtime.get("autostart"), True),
+            replay_ws_url=str(replay.get("ws_url", "ws://localhost:8765")).strip(),
+            replay_data_type=str(replay.get("data_type", "ohlcv_1m")).strip(),
+            replay_speed=_parse_float(replay.get("speed"), 5.0, "replay.speed"),
+            replay_start_time=str(replay.get("start_time", "")).strip(),
+            replay_end_time=str(replay.get("end_time", "")).strip(),
+            collector_base_url=str(collector.get("base_url", "http://localhost:8080")).strip(),
+            collector_events_path=str(collector.get("events_path", "/recorder/events")).strip(),
+            collector_provider=str(collector.get("provider", "")).strip().lower(),
+            collector_connect_timeout_seconds=_parse_int(
+                collector.get("connect_timeout_seconds"),
+                10,
+                "collector.connect_timeout_seconds",
             ),
-            collector_reconnect_seconds=int(
-                os.getenv("STRATEGY_RUNTIME_COLLECTOR_RECONNECT_SECONDS", "3")
+            collector_reconnect_seconds=_parse_int(
+                collector.get("reconnect_seconds"),
+                3,
+                "collector.reconnect_seconds",
             ),
-            collector_stale_timeout_seconds=int(
-                os.getenv("STRATEGY_RUNTIME_COLLECTOR_STALE_TIMEOUT_SECONDS", "45")
+            collector_stale_timeout_seconds=_parse_int(
+                collector.get("stale_timeout_seconds"),
+                45,
+                "collector.stale_timeout_seconds",
             ),
-            collector_fallback_policy=os.getenv(
-                "STRATEGY_RUNTIME_COLLECTOR_FALLBACK_POLICY",
-                "collector_only",
-            ).strip().lower(),
-            source_table=os.getenv("STRATEGY_RUNTIME_SOURCE_TABLE", "").strip(),
-            source_data_kind=os.getenv("STRATEGY_RUNTIME_SOURCE_DATA_KIND", "").strip().lower(),
-            options_source_table=os.getenv("STRATEGY_RUNTIME_OPTIONS_SOURCE_TABLE", "").strip(),
+            collector_fallback_policy=str(collector.get("fallback_policy", "collector_only")).strip().lower(),
+            source_table=str(replay.get("source_table", "")).strip(),
+            source_data_kind=str(replay.get("source_data_kind", "")).strip().lower(),
+            options_source_table=str(replay.get("options_source_table", "")).strip(),
             db_chunking_trading_days=(
-                _parse_positive_int("STRATEGY_RUNTIME_DB_CHUNKING_TRADING_DAYS")
-                if os.getenv("STRATEGY_RUNTIME_FEED_SOURCE", "broker").strip().lower() == "replay_ws"
-                else int(os.getenv("STRATEGY_RUNTIME_DB_CHUNKING_TRADING_DAYS", "1") or "1")
+                _parse_positive_int(replay.get("db_chunking_trading_days"), "replay.db_chunking_trading_days")
+                if str(runtime.get("feed_source", "broker")).strip().lower() == "replay_ws"
+                else _parse_int(replay.get("db_chunking_trading_days"), 1, "replay.db_chunking_trading_days")
             ),
             max_rows_per_chunk=(
-                _parse_positive_int("STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK")
-                if os.getenv("STRATEGY_RUNTIME_FEED_SOURCE", "broker").strip().lower() == "replay_ws"
-                else int(os.getenv("STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK", "1") or "1")
+                _parse_positive_int(replay.get("max_rows_per_chunk"), "replay.max_rows_per_chunk")
+                if str(runtime.get("feed_source", "broker")).strip().lower() == "replay_ws"
+                else _parse_int(replay.get("max_rows_per_chunk"), 1, "replay.max_rows_per_chunk")
             ),
         )
         settings.source_data_kind = (
