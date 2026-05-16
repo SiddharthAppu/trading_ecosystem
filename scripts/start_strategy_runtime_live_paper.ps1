@@ -15,6 +15,12 @@ $AUTH_HELPER = "$ROOT\scripts\authenticate_broker.py"
 $LOG_DIR = "$ROOT\logs\strategy_runtime"
 $AUTH_DIR = "$ROOT\config\auth"
 
+function Test-PortListening {
+    param([int]$Port)
+    $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    return (($connections | Measure-Object).Count -gt 0)
+}
+
 function Read-EnvFile {
     param([string]$Path)
 
@@ -100,6 +106,19 @@ if (-not $loadedEnv.ContainsKey("STRATEGY_RUNTIME_TRADING_PROVIDER")) {
 }
 if (-not $loadedEnv.ContainsKey("STRATEGY_RUNTIME_TIMEFRAME")) {
     [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_TIMEFRAME", "5m", 'Process')
+}
+
+$feedSource = [Environment]::GetEnvironmentVariable("STRATEGY_RUNTIME_FEED_SOURCE", "Process")
+if ([string]::IsNullOrWhiteSpace($feedSource)) {
+    $feedSource = "broker"
+}
+$feedSource = $feedSource.ToLowerInvariant()
+
+if ($feedSource -eq "collector_sse") {
+    if (-not (Test-PortListening -Port 8080)) {
+        Write-Error "STRATEGY_RUNTIME_FEED_SOURCE=collector_sse requires Data Collector on port 8080. Start collector first (e.g. scripts/start_live_capture_and_strategy.ps1)."
+        exit 1
+    }
 }
 
 Write-Host "==============================================="

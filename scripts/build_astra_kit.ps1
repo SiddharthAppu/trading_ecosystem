@@ -39,11 +39,13 @@ $copyItems = @(
     @{ Source = "scripts\authenticate_broker.py"; Target = "scripts\authenticate_broker.py" },
     @{ Source = "scripts\lib\quick_live_recorder.py"; Target = "scripts\lib\quick_live_recorder.py" },
     @{ Source = "scripts\lib\master_recorder.py"; Target = "scripts\lib\master_recorder.py" },
+    @{ Source = "sql_scripts\create_v_options_ohlc_1m_fromticks.sql"; Target = "sql_scripts\create_v_options_ohlc_1m_fromticks.sql"; Optional = $true },
     @{ Source = "services\strategy_runtime\astra-kit-requirements.txt"; Target = "services\strategy_runtime\astra-kit-requirements.txt" },
     @{ Source = "Astra_LLD.md"; Target = "docs\Astra_LLD.md" },
     @{ Source = "Astra_Requirements.md"; Target = "docs\Astra_Requirements.md" },
     @{ Source = "Astra_Requirements_v1.md"; Target = "docs\Astra_Requirements_v1.md" },
-    @{ Source = "Astra_UserGuide.md"; Target = "docs\Astra_UserGuide.md" }
+    @{ Source = "Astra_UserGuide.md"; Target = "docs\Astra_UserGuide.md" },
+    @{ Source = "docs\strategy_runtime_e2e_test_plan.md"; Target = "docs\strategy_runtime_e2e_test_plan.md"; Optional = $true }
 )
 
 function Invoke-Step {

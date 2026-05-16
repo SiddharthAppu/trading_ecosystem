@@ -32,6 +32,7 @@ $replayItems = @(
     @{ Source = "config\.env"; Target = "config\.env"; Optional = $true },
     @{ Source = "services\strategy_runtime\strategies\nifty_trend_options\STRATEGY.md"; Target = "services\strategy_runtime\strategies\nifty_trend_options\STRATEGY.md"; Optional = $true },
     @{ Source = "services\strategy_runtime\ARCHITECTURE_DIAGRAMS.md"; Target = "services\strategy_runtime\ARCHITECTURE_DIAGRAMS.md"; Optional = $true },
+    @{ Source = "docs\strategy_runtime_e2e_test_plan.md"; Target = "docs\strategy_runtime_e2e_test_plan.md"; Optional = $true },
     @{ Source = "scripts\START_REPLAY_KIT.ps1"; Target = "START_REPLAY_KIT.ps1" }
 )
 
@@ -44,8 +45,10 @@ $backtestItems = @(
     @{ Source = "config\.env"; Target = "config\.env"; Optional = $true },
     @{ Source = "config\strategy_runtime.backtest_example.env"; Target = "config\strategy_runtime.backtest_example.env" },
     @{ Source = "config\strategy_optimize_ranges.json"; Target = "config\strategy_optimize_ranges.json" },
+    @{ Source = "sql_scripts\create_v_options_ohlc_1m_fromticks.sql"; Target = "sql_scripts\create_v_options_ohlc_1m_fromticks.sql"; Optional = $true },
     @{ Source = "services\strategy_runtime\strategies\nifty_trend_options\STRATEGY.md"; Target = "docs\nifty_trend_options_STRATEGY.md"; Optional = $true },
     @{ Source = "Astra_UserGuide.md"; Target = "docs\Astra_UserGuide.md"; Optional = $true },
+    @{ Source = "docs\strategy_runtime_e2e_test_plan.md"; Target = "docs\strategy_runtime_e2e_test_plan.md"; Optional = $true },
     @{ Source = "scripts\START_BACKTEST_KIT.ps1"; Target = "START_BACKTEST_KIT.ps1" }
 )
 
