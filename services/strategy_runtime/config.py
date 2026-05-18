@@ -160,6 +160,13 @@ class RuntimeSettings:
     max_rows_per_chunk: int = 0
 
     def validate_source_config(self) -> None:
+        if not self.trading_provider:
+            raise RuntimeConfigError(
+                "runtime.trading_provider must be set explicitly and cannot be empty. "
+                "Use 'paper' for paper/simulated trading, or a live broker name "
+                "('upstox', 'fyers', 'zerodha') for real order execution."
+            )
+
         if self.feed_source not in ALLOWED_FEED_SOURCES:
             raise RuntimeConfigError(
                 f"Invalid feed_source: {self.feed_source}. Expected one of: {', '.join(sorted(ALLOWED_FEED_SOURCES))}"

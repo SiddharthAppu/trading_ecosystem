@@ -9,11 +9,20 @@
     for a date range if not supplied via parameters.
     Requires only Python + DB credentials in config/.env — no running services needed.
 
+        Parameter convention:
+        - Canonical: StrategyConfig, Strategy, From/To
+        - Legacy aliases: EnvFile -> StrategyConfig, StrategyName -> Strategy,
+            Date supported as single-day convenience
+
 .PARAMETER From
     Start date (YYYY-MM-DD). If omitted, you will be prompted.
 
 .PARAMETER To
     End date (YYYY-MM-DD). Defaults to today if omitted.
+
+.PARAMETER Date
+    Single-day convenience date (YYYY-MM-DD). When supplied, fills both From and To
+    unless either From or To is provided explicitly.
 
 .PARAMETER Mode
     backtest  - Run a single backtest (default)
@@ -30,8 +39,9 @@
     not provided.
 
 .PARAMETER StrategyConfig
-    Path to a strategy JSON file. Defaults to config/strategy_runtime.backtest_example.json.
-    Use this to supply per-strategy sizing, capital model, and indicator settings.
+    Path to a strategy JSON config file. Defaults to config/strategy_runtime.backtest_example.json.
+    IMPORTANT: This is NOT the same as -EnvFile. Use -StrategyConfig for JSON strategy configs.
+    Use this to supply per-strategy sizing, capital model, indicator settings, and backtest data tables.
     See config/strategy_runtime.backtest_example.json for all supported keys and comments.
 
 .PARAMETER OptimizerConfig
@@ -54,10 +64,12 @@
 param(
     [string]$From   = "",
     [string]$To     = "",
+    [string]$Date   = "",
     [ValidateSet("backtest", "optimize")]
     [string]$Mode   = "backtest",
     [int]$Top       = 10,
-    [string]$StrategyName = "",
+    [Alias("StrategyName")]
+    [string]$Strategy = "",
     [string]$Timeframe = "",
     [string]$LogFile = "",
     [string]$RunName = "",
@@ -66,7 +78,8 @@ param(
     [string]$ConfirmationMode = "interactive",
     [switch]$Smoke,
     [string]$Symbol = "",
-    [string]$EnvFile = "",
+    [string]$GlobalEnv = "",
+    [Alias("EnvFile")]
     [string]$StrategyConfig = "",
     [string]$OptimizerConfig = "",
     [switch]$h,
@@ -95,7 +108,7 @@ $OPTIMIZE_PY = "$KIT_ROOT\scripts\strategy_optimize.py"
 $STRATEGY_RUNTIME_DIR = "$KIT_ROOT\services\strategy_runtime"
 $OFFLINE_ADAPTER_RUNNER = "$STRATEGY_RUNTIME_DIR\offline_adapter\runner.py"
 $RUNTIME_REQUIREMENTS = "$STRATEGY_RUNTIME_DIR\astra-kit-requirements.txt"
-$GLOBAL_ENV  = if ($EnvFile) { if ([System.IO.Path]::IsPathRooted($EnvFile)) { $EnvFile } else { Join-Path $KIT_ROOT $EnvFile } } else { "$KIT_ROOT\config\.env" }
+$GLOBAL_ENV  = if ($GlobalEnv) { if ([System.IO.Path]::IsPathRooted($GlobalEnv)) { $GlobalEnv } else { Join-Path $KIT_ROOT $GlobalEnv } } else { "$KIT_ROOT\config\.env" }
 $STRATEGY_ENV = if ($StrategyConfig) { if ([System.IO.Path]::IsPathRooted($StrategyConfig)) { $StrategyConfig } else { Join-Path $KIT_ROOT $StrategyConfig } } else { "$KIT_ROOT\config\strategy_runtime.backtest_example.json" }
 $OPTIMIZER_CFG = if ($OptimizerConfig) { if ([System.IO.Path]::IsPathRooted($OptimizerConfig)) { $OptimizerConfig } else { Join-Path $KIT_ROOT $OptimizerConfig } } else { "$KIT_ROOT\config\strategy_optimize_ranges.json" }
 
@@ -114,6 +127,15 @@ if ($Smoke) {
     }
     if ([string]::IsNullOrWhiteSpace($RunName)) {
         $RunName = "smoke_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($Date)) {
+    if ([string]::IsNullOrWhiteSpace($From)) {
+        $From = $Date
+    }
+    if ([string]::IsNullOrWhiteSpace($To)) {
+        $To = $Date
     }
 }
 
@@ -238,6 +260,19 @@ function Import-StrategyJson([string]$Path) {
         }
     }
 
+    if ($null -ne $json.backtest) {
+        foreach ($prop in $json.backtest.PSObject.Properties) {
+            $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
+            switch ($prop.Name) {
+                "source_table" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_SOURCE_TABLE", $value, 'Process') }
+                "source_data_kind" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_SOURCE_DATA_KIND", $value, 'Process') }
+                "options_source_table" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_OPTIONS_SOURCE_TABLE", $value, 'Process') }
+                "db_chunking_trading_days" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_DB_CHUNKING_TRADING_DAYS", $value, 'Process') }
+                "max_rows_per_chunk" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK", $value, 'Process') }
+            }
+        }
+    }
+
     if ($null -ne $json.strategy_params) {
         foreach ($prop in $json.strategy_params.PSObject.Properties) {
             $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
@@ -311,6 +346,59 @@ function Parse-FloatOrExit {
     return $parsed
 }
 
+function Invoke-BacktestConfigConsistencyCheck {
+    param(
+        [string]$Provider,
+        [string]$SourceDataKind,
+        [string]$SourceTable,
+        [string]$OptionsSourceTable,
+        [string]$ReplayDataType
+    )
+
+    $providerLower = if ([string]::IsNullOrWhiteSpace($Provider)) { "" } else { $Provider.Trim().ToLowerInvariant() }
+    $sourceKindLower = if ([string]::IsNullOrWhiteSpace($SourceDataKind)) { "" } else { $SourceDataKind.Trim().ToLowerInvariant() }
+    $replayDataTypeLower = if ([string]::IsNullOrWhiteSpace($ReplayDataType)) { "" } else { $ReplayDataType.Trim().ToLowerInvariant() }
+
+    if ($SourceTable -notmatch '^[^.]+\.[^.]+$') {
+        throw "Invalid source table '$SourceTable'. Expected schema.table format."
+    }
+
+    if ($OptionsSourceTable -notmatch '^[^.]+\.[^.]+$') {
+        throw "Invalid options source table '$OptionsSourceTable'. Expected schema.table format."
+    }
+
+    if ($providerLower -in @("upstox", "fyers")) {
+        if ($SourceTable -match '^broker_(upstox|fyers)\.') {
+            $sourceSchemaProvider = $Matches[1].ToLowerInvariant()
+            if ($sourceSchemaProvider -ne $providerLower) {
+                throw "Provider/schema mismatch: runtime.provider is '$Provider' but source_table is '$SourceTable'."
+            }
+        }
+
+        if ($OptionsSourceTable -match '^broker_(upstox|fyers)\.') {
+            $optionsSchemaProvider = $Matches[1].ToLowerInvariant()
+            if ($optionsSchemaProvider -ne $providerLower) {
+                throw "Provider/schema mismatch: runtime.provider is '$Provider' but options_source_table is '$OptionsSourceTable'."
+            }
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($replayDataTypeLower)) {
+        $allowedReplayDataTypes = @("market_ticks", "ohlcv_1m", "ohlcv_1min_from_ticks", "options_ohlc")
+        if ($allowedReplayDataTypes -notcontains $replayDataTypeLower) {
+            throw "Invalid replay.data_type '$ReplayDataType'. Expected one of: market_ticks, ohlcv_1m, ohlcv_1min_from_ticks, options_ohlc."
+        }
+
+        if ($replayDataTypeLower -eq "market_ticks" -and $sourceKindLower -ne "ticks") {
+            throw "Incompatible config: replay.data_type '$ReplayDataType' requires source_data_kind 'ticks'."
+        }
+
+        if ($replayDataTypeLower -in @("ohlcv_1m", "ohlcv_1min_from_ticks", "options_ohlc") -and $sourceKindLower -ne "bars") {
+            throw "Incompatible config: replay.data_type '$ReplayDataType' requires source_data_kind 'bars'."
+        }
+    }
+}
+
 if (Test-Path $GLOBAL_ENV) {
     Import-EnvFile $GLOBAL_ENV
     Write-Host "[INFO] Loaded credentials from $GLOBAL_ENV" -ForegroundColor DarkGray
@@ -327,8 +415,8 @@ if (Test-Path $STRATEGY_ENV) {
     Write-Host "       Continuing with CLI values/defaults for strategy metadata." -ForegroundColor Yellow
 }
 
-$effectiveStrategyName = if ($PSBoundParameters.ContainsKey("StrategyName") -and -not [string]::IsNullOrWhiteSpace($StrategyName)) {
-    $StrategyName
+$effectiveStrategyName = if ($PSBoundParameters.ContainsKey("Strategy") -and -not [string]::IsNullOrWhiteSpace($Strategy)) {
+    $Strategy
 } elseif (-not [string]::IsNullOrWhiteSpace($env:STRATEGY_RUNTIME_STRATEGY)) {
     $env:STRATEGY_RUNTIME_STRATEGY
 } else {
@@ -361,6 +449,9 @@ $effectiveIndexSymbol = if ($Symbol -ne "") {
 $effectiveSourceTable = Get-FirstEnvValue @("STRATEGY_RUNTIME_SOURCE_TABLE")
 if ([string]::IsNullOrWhiteSpace($effectiveSourceTable)) { $effectiveSourceTable = "master_broker.ohlcv_1m" }
 
+$effectiveProvider = Get-FirstEnvValue @("STRATEGY_RUNTIME_PROVIDER")
+if ([string]::IsNullOrWhiteSpace($effectiveProvider)) { $effectiveProvider = "upstox" }
+
 $effectiveSourceDataKind = Get-FirstEnvValue @("STRATEGY_RUNTIME_SOURCE_DATA_KIND")
 if ([string]::IsNullOrWhiteSpace($effectiveSourceDataKind)) { $effectiveSourceDataKind = "bars" }
 $effectiveSourceDataKind = $effectiveSourceDataKind.Trim().ToLowerInvariant()
@@ -371,6 +462,8 @@ if ($effectiveSourceDataKind -ne "bars" -and $effectiveSourceDataKind -ne "ticks
 
 $effectiveOptionsTable = Get-FirstEnvValue @("STRATEGY_RUNTIME_OPTIONS_SOURCE_TABLE")
 if ([string]::IsNullOrWhiteSpace($effectiveOptionsTable)) { $effectiveOptionsTable = "master_broker.options_ohlc_1m_fromupstox" }
+
+$effectiveReplayDataType = Get-FirstEnvValue @("STRATEGY_RUNTIME_REPLAY_DATA_TYPE")
 
 $chunkingDaysRaw = Get-FirstEnvValue @("STRATEGY_RUNTIME_DB_CHUNKING_TRADING_DAYS")
 if ([string]::IsNullOrWhiteSpace($chunkingDaysRaw)) { $chunkingDaysRaw = "5" }
@@ -387,7 +480,7 @@ if ($effectiveMaxRowsPerChunk -le 0) {
     Write-Host "[ERROR] STRATEGY_RUNTIME_MAX_ROWS_PER_CHUNK must be > 0" -ForegroundColor Red
     exit 1
 }
-$strategyNameSource = if ($PSBoundParameters.ContainsKey("StrategyName") -and -not [string]::IsNullOrWhiteSpace($StrategyName)) {
+$strategyNameSource = if ($PSBoundParameters.ContainsKey("Strategy") -and -not [string]::IsNullOrWhiteSpace($Strategy)) {
     "CLI"
 } elseif (-not [string]::IsNullOrWhiteSpace($env:STRATEGY_RUNTIME_STRATEGY)) {
     "config"
@@ -471,6 +564,18 @@ $stopLossPctRaw = Get-FirstEnvValue @("NIFTY_STOP_LOSS_PREMIUM_PCT", "NIFTY_STOP
 if ([string]::IsNullOrWhiteSpace($stopLossPctRaw)) { $stopLossPctRaw = "0.5" }
 $effectiveStopLossPct = Parse-FloatOrExit -Value $stopLossPctRaw -FieldName "NIFTY_STOP_LOSS_PREMIUM_PCT"
 
+try {
+    Invoke-BacktestConfigConsistencyCheck `
+        -Provider $effectiveProvider `
+        -SourceDataKind $effectiveSourceDataKind `
+        -SourceTable $effectiveSourceTable `
+        -OptionsSourceTable $effectiveOptionsTable `
+        -ReplayDataType $effectiveReplayDataType
+} catch {
+    Write-Host "[ERROR] Backtest config preflight failed: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
+
 # ── Runtime dependency preflight ─────────────────────────────────────────────
 & $PYTHON_EXE -c "import psycopg2" 2>$null
 if ($LASTEXITCODE -ne 0) {
@@ -490,6 +595,10 @@ Write-Host "  Strategy   : $effectiveStrategyName ($strategyNameSource)" -Foregr
 Write-Host "  Timeframe  : $effectiveTimeframe ($timeframeSource)" -ForegroundColor White
 Write-Host "  Log file   : $effectiveLogFile ($logFileSource)" -ForegroundColor White
 Write-Host "  Index sym  : $effectiveIndexSymbol" -ForegroundColor White
+Write-Host "  Provider   : $effectiveProvider" -ForegroundColor White
+if (-not [string]::IsNullOrWhiteSpace($effectiveReplayDataType)) {
+    Write-Host "  Replay dtype (cfg): $effectiveReplayDataType" -ForegroundColor White
+}
 Write-Host "  Mode       : $Mode" -ForegroundColor White
 
 Write-Host ""

@@ -240,7 +240,9 @@ pip install --no-index --find-links .\wheelhouse -e .\packages\trading_core
 
 Edit `config\.env` with your database and (optionally) Telegram credentials. See [Section 3](#3-prerequisites) for the template.
 
-### Step 5: Configure the strategy JSON file (replay kit)
+### Step 5: Configure the strategy JSON file
+
+#### For Replay Kit
 
 Edit `config\strategy_runtime.paper_replay.json`:
 
@@ -249,6 +251,7 @@ Edit `config\strategy_runtime.paper_replay.json`:
   "runtime": {
     "feed_source": "replay_ws",
     "provider": "fyers",
+    "trading_provider": "paper",
     "symbol": "NSE:NIFTY50-INDEX",
     "timeframe": "1m"
   },
@@ -265,6 +268,10 @@ Edit `config\strategy_runtime.paper_replay.json`:
   "replay": {
     "ws_url": "ws://localhost:8765",
     "speed": 5,
+    "data_type": "ohlcv_1m",
+    "source_table": "master_broker.ohlcv_1m",
+    "source_data_kind": "bars",
+    "options_source_table": "master_broker.options_ohlc_1m_fromupstox",
     "start_time": "2026-04-15T09:15:00+05:30",
     "end_time": "2026-04-15T15:30:00+05:30"
   },
@@ -282,6 +289,56 @@ Edit `config\strategy_runtime.paper_replay.json`:
   }
 }
 ```
+
+#### For Backtest Kit
+
+Use a JSON file with `feed_source: "offline_adapter"` and a `backtest` section instead of `replay`:
+
+```json
+{
+  "runtime": {
+    "feed_source": "offline_adapter",
+    "provider": "upstox",
+    "trading_provider": "paper",
+    "symbol": "NSE:NIFTY50-INDEX",
+    "timeframe": "5m",
+    "log_level": "INFO"
+  },
+  "strategy": {
+    "name": "nifty_trend_options"
+  },
+  "risk": {
+    "lot_quantity": 1,
+    "lot_size": 75,
+    "initial_capital": 100000,
+    "capital_model": "non_compounding",
+    "stop_loss_pct": 0.01,
+    "max_position_lots": 1
+  },
+  "backtest": {
+    "source_table": "master_broker.ohlcv_1m",
+    "source_data_kind": "bars",
+    "options_source_table": "master_broker.options_ohlc_1m_fromupstox",
+    "db_chunking_trading_days": 5,
+    "max_rows_per_chunk": 100000
+  },
+  "telegram": {
+    "enabled": false
+  },
+  "strategy_params": {
+    "NIFTY_TARGET_PREMIUM": 200.0,
+    "NIFTY_EMA_PERIOD": 20,
+    "NIFTY_SMA_PERIOD": 20,
+    "NIFTY_MACD_FAST": 12,
+    "NIFTY_MACD_SLOW": 26,
+    "NIFTY_MACD_SIGNAL": 9
+  }
+}
+```
+
+**Key differences:**
+- **Replay kit**: `feed_source: "replay_ws"`, `replay` section with WebSocket URL and speed
+- **Backtest kit**: `feed_source: "offline_adapter"`, `backtest` section with DB table names and chunking params
 
 ---
 
@@ -341,19 +398,28 @@ If preflight found `0` rows, the launcher warns that replay may remain idle with
 ### Override replay date at launch
 
 ```powershell
-.\START_REPLAY_KIT.ps1 -Date 2026-04-15
+.\START_REPLAY_KIT.ps1 -From 2026-04-15
 ```
 
 ### Override config at launch
 
-You can override the default configuration files if you have multiple strategy setups:
+**IMPORTANT:** Parameter naming clarification:
+- `-StrategyConfig`: Strategy JSON config path
+- `-GlobalEnv`: Global `.env` credentials file (DB connection, Telegram keys)
+- `-EnvFile`: legacy alias of `-StrategyConfig`
+- Use the default `config\strategy_runtime.paper_replay.json` or override with parameter below
+
+**Use `-StrategyConfig` for strategy JSON config files**:
 
 ```powershell
-# Point to a specific strategy config
-.\START_REPLAY_KIT.ps1 -EnvFile "config\strategy_runtime.ema_cross.paper_replay.json"
+# Strategy JSON config
+.\START_REPLAY_KIT.ps1 -StrategyConfig "config\strategy_runtime.nifty_trend_options.paper_replay.json"
 
-# Point to custom global credentials (DB etc.)
+# Override global credentials (DB etc.)
 .\START_REPLAY_KIT.ps1 -GlobalEnv "C:\Secrets\.env"
+
+# Backward-compatible legacy alias (still works)
+.\START_REPLAY_KIT.ps1 -EnvFile "config\strategy_runtime.nifty_trend_options.paper_replay.json"
 ```
 
 ### Change strategy
@@ -367,6 +433,8 @@ You can override the default configuration files if you have multiple strategy s
 ```powershell
 .\START_REPLAY_KIT.ps1 -SkipReplayEngine
 ```
+
+Canonical replay-engine switch is positive semantics (`-StartReplayEngine`, default behavior). `-SkipReplayEngine` is retained for compatibility.
 
 ### What the console shows during replay
 
@@ -597,28 +665,31 @@ Show top 15 parameter combinations instead of default 10:
 
 ### Override credentials at launch
 
+**IMPORTANT:** Use `-GlobalEnv` for the global `.env` credentials file (DB connection):
+
 ```powershell
-.\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -EnvFile "D:\Configs\trading_db.env"
+.\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -GlobalEnv "D:\Configs\trading_db.env"
 ```
 
-### Reuse strategy config file from config directory
+### Use a different strategy config file
 
-By default, `START_BACKTEST_KIT.ps1` also reads strategy metadata from:
+**IMPORTANT:** Use `-StrategyConfig` for JSON strategy config files (`-EnvFile` remains a compatibility alias):
+
+```powershell
+.\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -StrategyConfig "config\strategy_runtime.nifty_trend_options.backtest_bars.json"
+```
+
+By default, `START_BACKTEST_KIT.ps1` reads strategy metadata from:
 
 ```text
-config\strategy_runtime.paper_replay.json
+config\strategy_runtime.backtest_example.json
 ```
 
 It picks these keys when present:
 - `strategy.name` -> backtest `--strategy-name`
 - `runtime.timeframe` -> backtest `--timeframe`
 - `runtime.log_file` -> backtest `--log-file`
-
-Use a different strategy config file with:
-
-```powershell
-.\START_BACKTEST_KIT.ps1 -From 2026-04-01 -To 2026-04-28 -StrategyConfig "config\strategy_runtime.ema_cross.paper_replay.json"
-```
+- `backtest.source_table`, `backtest.source_data_kind`, `backtest.options_source_table` -> offline adapter config
 
 CLI parameters always override values loaded from the strategy config file.
 
@@ -875,24 +946,33 @@ Legend:
 
 | Key | Description | Applies To | Example |
 |---|---|---|---|
-| `runtime.feed_source` | `broker` or `replay_ws` | `RP, LK` | `replay_ws` |
-| `runtime.provider` | Broker provider namespace | `RP, LK` | `fyers` |
-| `runtime.symbol` | Underlying symbol | `RP, LK` | `NSE:NIFTY50-INDEX` |
-| `runtime.timeframe` | Bar timeframe | `RP, BT, LK` | `1m` |
-| `strategy.name` | Strategy module name | `RP, BT, LK` | `nifty_trend_options` |
+| `runtime.feed_source` | `offline_adapter`, `replay_ws`, or `broker` | `BT, RP, LK` | `offline_adapter` (backtest) or `replay_ws` (replay) |
+| `runtime.provider` | Broker provider namespace | `RP, BT, LK` | `upstox`, `fyers` |
+| `runtime.trading_provider` | **REQUIRED** Trading execution provider | `RP, BT, LK` | `paper`, `upstox`, `fyers`, `zerodha` |
+| `runtime.symbol` | Underlying symbol | `RP, BT, LK` | `NSE:NIFTY50-INDEX` |
+| `runtime.timeframe` | Bar timeframe | `RP, BT, LK` | `1m`, `5m` |
+| `strategy.name` | Strategy module name | `RP, BT, LK` | `nifty_trend_options`, `ema_cross` |
 | `risk.lot_quantity` | Base lots per trade; set `-1` for auto-lot mode | `RP, BT, LK` | `1` |
 | `risk.lot_size` | Units per lot for the instrument | `RP, BT, LK` | `75` |
 | `risk.initial_capital` | Starting capital (Rs) | `RP, BT, LK` | `100000` |
-| `risk.capital_model` | Position sizing capital mode | `RP, BT, LK` | `non_compounding` |
-| `risk.max_position_lots` | Maximum lots allowed | `RP, LK` | `1` |
-| `risk.stop_loss_pct` | Stop loss % (0.60 = 60%) | `RP, LK` | `0.60` |
+| `risk.capital_model` | Position sizing capital mode | `RP, BT, LK` | `non_compounding`, `compounding` |
+| `risk.max_position_lots` | Maximum lots allowed | `RP, BT, LK` | `1` |
+| `risk.stop_loss_pct` | Stop loss % (0.60 = 60%) | `RP, BT, LK` | `0.60` |
 | `replay.ws_url` | Replay engine WebSocket URL | `RP, LK` | `ws://localhost:8765` |
 | `replay.speed` | Replay speed multiplier | `RP, LK` | `5` |
+| `replay.data_type` | Data type streamed by replay engine | `RP, LK` | `ohlcv_1m`, `market_ticks` |
+| `replay.source_table` | Market data source table (replay mode) | `RP, LK` | `master_broker.ohlcv_1m` |
+| `replay.source_data_kind` | Source data format (replay mode) | `RP, LK` | `bars`, `ticks` |
 | `replay.start_time` | ISO8601 replay start | `RP, LK` | `2026-04-15T09:15:00+05:30` |
 | `replay.end_time` | ISO8601 replay end | `RP, LK` | `2026-04-15T15:30:00+05:30` |
-| `STRATEGY_RUNTIME_REPLAY_DATA_TYPE` | Data type streamed by replay engine | `RP, LK` | `ohlcv_1m` or `market_ticks` |
-| `STRATEGY_RUNTIME_INDICATOR_INPUT_MODE` | How indicators receive data | `RP, LK` | `bars_1m` or `ticks` |
-| `TELEGRAM_ENABLED` | Enable Telegram alerts | `RP, LK` | `false` |
+| **BACKTEST SECTION** | | | |
+| `backtest.source_table` | Market data source table (offline adapter) | `BT` | `master_broker.ohlcv_1m`, `broker_upstox.market_ticks` |
+| `backtest.source_data_kind` | Source data format (backtest/optimize) | `BT` | `bars`, `ticks` |
+| `backtest.options_source_table` | Options chain source table | `BT` | `master_broker.options_ohlc_1m_fromupstox` |
+| `backtest.db_chunking_trading_days` | Days per chunk in DB query | `BT` | `5` (bars) or `2` (ticks) |
+| `backtest.max_rows_per_chunk` | Row limit per chunk fetch | `BT` | `100000` |
+| `STRATEGY_RUNTIME_INDICATOR_INPUT_MODE` | How indicators receive data | `RP, BT, LK` | `bars_1m`, `ticks` |
+| `TELEGRAM_ENABLED` | Enable Telegram alerts | `RP, BT, LK` | `false`, `true` |
 | `NIFTY_PREMIUM_TARGET` | Target option premium (Rs) | `RP, BT, LK, Stra` | `200.0` |
 | `NIFTY_PREMIUM_TOLERANCE` | Premium tolerance window (Rs) | `RP, BT, LK, Stra` | `30.0` |
 | `NIFTY_REWARD_RISK_RATIO` | Exit target as multiple of stop | `RP, BT, LK, Stra` | `2.0` |

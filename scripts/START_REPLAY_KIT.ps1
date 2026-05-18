@@ -10,38 +10,74 @@
     Polls /status every 5 seconds and shows live color-coded progress while replay runs.
     Writes a per-run summary log to logs/run_summaries/.
 
+        Parameter convention:
+        - Canonical: StrategyConfig, Strategy, From/To, StartReplayEngine
+        - Legacy aliases: EnvFile -> StrategyConfig, StrategyName -> Strategy,
+            Date -> From, SkipReplayEngine retained for compatibility
+
 .PARAMETER Strategy
     Strategy name to run. Default: nifty_trend_options
 
-.PARAMETER Date
-    Replay date (YYYY-MM-DD) to start from. If omitted, the env file value is used.
+.PARAMETER From
+    Replay date (YYYY-MM-DD) to start from. Alias: Date.
+
+.PARAMETER To
+    Optional replay end date (YYYY-MM-DD). For single-day replay, set same value as From.
+
+.PARAMETER StartReplayEngine
+    If set, starts replay engine with the runtime. Default behavior already starts it.
 
 .PARAMETER SkipReplayEngine
-    If set, only starts the strategy runtime (assumes replay engine is already running).
+    Legacy alias semantics. If set, only starts the strategy runtime.
 
 .PARAMETER ConfirmationMode
     interactive    -> prompt after preflight summary before launching runtime
     non-interactive -> do not prompt; continue automatically
 
+.PARAMETER GlobalEnv
+    Path to global credentials file (.env). Defaults to config/.env
+
+.PARAMETER StrategyConfig
+    Path to a strategy JSON config file. Defaults to config/strategy_runtime.paper_replay.json.
+    IMPORTANT: This is for strategy JSON configs, NOT for .env credentials.
+
 .EXAMPLE
     .\START_REPLAY_KIT.ps1
+    .\START_REPLAY_KIT.ps1 -From 2026-04-15
     .\START_REPLAY_KIT.ps1 -Date 2026-04-15
-    .\START_REPLAY_KIT.ps1 -Strategy nifty_trend_options -Date 2026-04-20
+    .\START_REPLAY_KIT.ps1 -Strategy nifty_trend_options -From 2026-04-20
     .\START_REPLAY_KIT.ps1 -ConfirmationMode non-interactive
 #>
 param(
+    [Alias("StrategyName")]
     [string]$Strategy = "nifty_trend_options",
-    [string]$Date = "",
+    [Alias("Date")]
+    [string]$From = "",
+    [string]$To = "",
+    [switch]$StartReplayEngine,
     [switch]$SkipReplayEngine,
     [ValidateSet("interactive", "non-interactive")]
     [string]$ConfirmationMode = "interactive",
     [string]$GlobalEnv = "",
-    [string]$EnvFile = "",
+    [Alias("EnvFile")]
+    [string]$StrategyConfig = "",
     [switch]$h,
     [switch]$Help
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($PSBoundParameters.ContainsKey("StartReplayEngine") -and $PSBoundParameters.ContainsKey("SkipReplayEngine")) {
+    Write-Host "[ERROR] Use either -StartReplayEngine or -SkipReplayEngine, not both." -ForegroundColor Red
+    exit 1
+}
+
+$shouldStartReplayEngine = $true
+if ($PSBoundParameters.ContainsKey("SkipReplayEngine")) {
+    $shouldStartReplayEngine = -not [bool]$SkipReplayEngine
+} elseif ($PSBoundParameters.ContainsKey("StartReplayEngine")) {
+    $shouldStartReplayEngine = [bool]$StartReplayEngine
+}
 
 # ── Help option ────────────────────────────────────────────────────────────────
 if ($PSBoundParameters.ContainsKey('h') -or $PSBoundParameters.ContainsKey('Help')) {
@@ -54,7 +90,7 @@ $KIT_ROOT    = $PSScriptRoot
 $PYTHON_EXE  = "$KIT_ROOT\.venv\Scripts\python.exe"
 $RUNTIME_SRV = "$KIT_ROOT\services\strategy_runtime\server.py"
 $REPLAY_MAIN  = "$KIT_ROOT\services\replay_engine\main.py"
-$ENV_FILE     = if ($EnvFile) { if ([System.IO.Path]::IsPathRooted($EnvFile)) { $EnvFile } else { Join-Path $KIT_ROOT $EnvFile } } else { "$KIT_ROOT\config\strategy_runtime.paper_replay.json" }
+$ENV_FILE     = if ($StrategyConfig) { if ([System.IO.Path]::IsPathRooted($StrategyConfig)) { $StrategyConfig } else { Join-Path $KIT_ROOT $StrategyConfig } } else { "$KIT_ROOT\config\strategy_runtime.paper_replay.json" }
 $GLOBAL_ENV   = if ($GlobalEnv) { if ([System.IO.Path]::IsPathRooted($GlobalEnv)) { $GlobalEnv } else { Join-Path $KIT_ROOT $GlobalEnv } } else { "$KIT_ROOT\config\.env" }
 $LOG_DIR      = "$KIT_ROOT\logs"
 $RUN_SUMMARY_DIR = "$LOG_DIR\run_summaries"
@@ -129,10 +165,11 @@ function Load-StrategyJsonFile([string]$Path) {
         foreach ($prop in $json.runtime.PSObject.Properties) {
             $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
             switch ($prop.Name) {
-                "feed_source" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_FEED_SOURCE", $value, 'Process') }
-                "provider" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_PROVIDER", $value, 'Process') }
-                "symbol" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_SYMBOL", $value, 'Process') }
-                "timeframe" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_TIMEFRAME", $value, 'Process') }
+                "feed_source"       { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_FEED_SOURCE",        $value, 'Process') }
+                "provider"          { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_PROVIDER",           $value, 'Process') }
+                "trading_provider"  { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_TRADING_PROVIDER",   $value, 'Process') }
+                "symbol"            { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_SYMBOL",             $value, 'Process') }
+                "timeframe"         { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_TIMEFRAME",          $value, 'Process') }
             }
         }
     }
@@ -142,6 +179,9 @@ function Load-StrategyJsonFile([string]$Path) {
             $value = if ($null -eq $prop.Value) { "" } else { [string]$prop.Value }
             switch ($prop.Name) {
                 "data_type" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_DATA_TYPE", $value, 'Process') }
+                "source_table" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_SOURCE_TABLE", $value, 'Process') }
+                "source_data_kind" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_SOURCE_DATA_KIND", $value, 'Process') }
+                "options_source_table" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_OPTIONS_SOURCE_TABLE", $value, 'Process') }
                 "speed" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_SPEED", $value, 'Process') }
                 "start_time" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_START_TIME", $value, 'Process') }
                 "end_time" { [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_REPLAY_END_TIME", $value, 'Process') }
@@ -159,7 +199,14 @@ function Load-StrategyJsonFile([string]$Path) {
 }
 
 function Write-RunSummary([string]$Message, [string]$Color = "Gray") {
-    Write-Host $Message -ForegroundColor $Color
+    if ([string]::IsNullOrWhiteSpace($Color)) {
+        $Color = "Gray"
+    }
+    try {
+        Write-Host $Message -ForegroundColor $Color
+    } catch {
+        Write-Host $Message -ForegroundColor Gray
+    }
     Add-Content -Path $RUN_SUMMARY_FILE -Value $Message -Encoding UTF8
 }
 
@@ -189,6 +236,223 @@ function Get-RuntimeStatus([string]$BaseUrl = "http://localhost:8090") {
         return Invoke-RestMethod -Uri "$BaseUrl/status" -Method Get -TimeoutSec 5
     } catch {
         return $null
+    }
+}
+
+function Get-ReplayPortListeners([int[]]$Ports) {
+    $listeners = @()
+    foreach ($port in $Ports) {
+        $connections = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+        foreach ($conn in $connections) {
+            $procId = [int]$conn.OwningProcess
+            $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+            $commandLine = ""
+            try {
+                $procCim = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
+                if ($null -ne $procCim) {
+                    $commandLine = [string]$procCim.CommandLine
+                }
+            } catch {
+                # Ignore command line lookup failures.
+            }
+            $listeners += [PSCustomObject]@{
+                Port        = $port
+                Pid         = $procId
+                ProcessName = if ($null -ne $proc) { $proc.ProcessName } else { "<unknown>" }
+                CommandLine = if ([string]::IsNullOrWhiteSpace($commandLine)) { "<unavailable>" } else { $commandLine }
+            }
+        }
+    }
+    return @($listeners | Sort-Object Port, Pid -Unique)
+}
+
+function Invoke-ReplayPortCleanup([int[]]$Ports, [string]$ConfirmationMode) {
+    $listeners = Get-ReplayPortListeners -Ports $Ports
+    if (($listeners | Measure-Object).Count -eq 0) {
+        Write-RunSummary "[PREFLIGHT] Replay port check: ports 8765/8766 are free." "Green"
+        return
+    }
+
+    Write-RunSummary "[PREFLIGHT] Replay port check: found listeners on required ports." "Yellow"
+    foreach ($item in $listeners) {
+        Write-RunSummary "  Port $($item.Port) -> PID $($item.Pid) [$($item.ProcessName)]" "Yellow"
+        Write-RunSummary "    Command: $($item.CommandLine)" "DarkGray"
+    }
+
+    if ($ConfirmationMode -ne "interactive") {
+        throw "Replay ports are in use. Re-run with -ConfirmationMode interactive to approve cleanup, or free ports manually."
+    }
+
+    Write-Host "" 
+    $cleanupAnswer = Read-Host "Replay ports are busy. Terminate those processes now? [Y/N]"
+    $normalizedCleanup = if ($null -eq $cleanupAnswer) { "" } else { ([string]$cleanupAnswer).Trim().ToLowerInvariant() }
+    if ($normalizedCleanup -notin @("y", "yes")) {
+        throw "Port cleanup was declined by user. Launch aborted."
+    }
+
+    $uniquePids = @($listeners | Select-Object -ExpandProperty Pid -Unique)
+    foreach ($procId in $uniquePids) {
+        try {
+            Stop-Process -Id $procId -Force -ErrorAction Stop
+            Write-RunSummary "  Stopped PID $procId" "Green"
+        } catch {
+            throw "Failed to stop PID $procId. $($_.Exception.Message)"
+        }
+    }
+
+    $remaining = Get-ReplayPortListeners -Ports $Ports
+    if (($remaining | Measure-Object).Count -gt 0) {
+        throw "Port cleanup completed but replay ports are still in use."
+    }
+
+    Write-RunSummary "[PREFLIGHT] Replay port cleanup completed successfully." "Green"
+}
+
+function Invoke-DatabaseReadinessCheck(
+    [string]$PythonExe,
+    [string]$DatabaseUrl,
+    [string]$DbHost,
+    [string]$DbPort,
+    [int]$MaxAttempts = 20,
+    [int]$DelaySeconds = 2
+) {
+    if ([string]::IsNullOrWhiteSpace($DatabaseUrl)) {
+        if ([string]::IsNullOrWhiteSpace($DbHost) -or [string]::IsNullOrWhiteSpace($DbPort)) {
+            Write-RunSummary "[PREFLIGHT] DB readiness check skipped: DATABASE_URL/DB_HOST/DB_PORT not set." "Yellow"
+            return
+        }
+
+        $tcpReady = $false
+        try {
+            $tcp = Test-NetConnection -ComputerName $DbHost -Port ([int]$DbPort) -WarningAction SilentlyContinue
+            $tcpReady = [bool]$tcp.TcpTestSucceeded
+        } catch {
+            $tcpReady = $false
+        }
+
+        if (-not $tcpReady) {
+            throw "Database endpoint is not reachable at ${DbHost}:${DbPort}."
+        }
+
+        Write-RunSummary "[PREFLIGHT] DB TCP check passed at ${DbHost}:${DbPort}." "Green"
+        return
+    }
+
+    $probeCode = @'
+import asyncio
+import os
+import sys
+
+try:
+    import asyncpg
+except Exception as exc:
+    print(f"IMPORT_ERROR:{exc}")
+    raise SystemExit(3)
+
+
+async def main() -> int:
+    dsn = os.getenv("DATABASE_URL", "")
+    if not dsn:
+        print("NO_DSN")
+        return 2
+
+    try:
+        conn = await asyncpg.connect(dsn)
+        try:
+            await conn.fetchval("SELECT 1")
+            print("READY")
+            return 0
+        finally:
+            await conn.close()
+    except Exception as exc:
+        print(f"NOT_READY:{exc}")
+        return 1
+
+
+raise SystemExit(asyncio.run(main()))
+'@
+
+    $probeFile = Join-Path $env:TEMP ("astra_db_probe_{0}.py" -f [Guid]::NewGuid().ToString("N"))
+    Set-Content -Path $probeFile -Value $probeCode -Encoding UTF8
+
+    try {
+        for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+            $probeOutput = (& $PythonExe $probeFile 2>&1 | Out-String).Trim()
+            $probeExit = $LASTEXITCODE
+
+            if ($probeExit -eq 0) {
+                Write-RunSummary "[PREFLIGHT] DB readiness check passed (SQL ping successful)." "Green"
+                return
+            }
+
+            if ($probeExit -eq 3) {
+                throw "Database readiness probe failed: asyncpg import error. Output: $probeOutput"
+            }
+
+            if ($probeExit -eq 2) {
+                throw "Database readiness probe failed: DATABASE_URL not available to probe."
+            }
+
+            if ($attempt -eq $MaxAttempts) {
+                throw "Database not ready after $MaxAttempts attempts. Last probe output: $probeOutput"
+            }
+
+            Write-RunSummary "[PREFLIGHT] DB not ready yet (attempt $attempt/$MaxAttempts). Retrying in ${DelaySeconds}s..." "Yellow"
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    } finally {
+        Remove-Item -Path $probeFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-ReplayConfigConsistencyCheck(
+    [string]$FeedSource,
+    [string]$Provider,
+    [string]$DataType,
+    [string]$SourceDataKind,
+    [string]$SourceTable,
+    [string]$OptionsSourceTable
+) {
+    $feed = if ([string]::IsNullOrWhiteSpace($FeedSource)) { "" } else { $FeedSource.Trim().ToLowerInvariant() }
+    if ($feed -ne "replay_ws") {
+        return
+    }
+
+    $dataTypeLower = if ([string]::IsNullOrWhiteSpace($DataType)) { "" } else { $DataType.Trim().ToLowerInvariant() }
+    $sourceKindLower = if ([string]::IsNullOrWhiteSpace($SourceDataKind)) { "" } else { $SourceDataKind.Trim().ToLowerInvariant() }
+    $providerLower = if ([string]::IsNullOrWhiteSpace($Provider)) { "" } else { $Provider.Trim().ToLowerInvariant() }
+
+    $allowedDataTypes = @("market_ticks", "ohlcv_1m", "ohlcv_1min_from_ticks", "options_ohlc")
+    if ($allowedDataTypes -notcontains $dataTypeLower) {
+        throw "Invalid replay.data_type '$DataType'. Expected one of: market_ticks, ohlcv_1m, ohlcv_1min_from_ticks, options_ohlc."
+    }
+
+    if ($sourceKindLower -notin @("bars", "ticks")) {
+        throw "Invalid replay.source_data_kind '$SourceDataKind'. Expected one of: bars, ticks."
+    }
+
+    if ($dataTypeLower -eq "market_ticks" -and $sourceKindLower -ne "ticks") {
+        throw "Incompatible replay config: replay.data_type '$DataType' requires replay.source_data_kind 'ticks'."
+    }
+
+    if ($dataTypeLower -in @("ohlcv_1m", "ohlcv_1min_from_ticks", "options_ohlc") -and $sourceKindLower -ne "bars") {
+        throw "Incompatible replay config: replay.data_type '$DataType' requires replay.source_data_kind 'bars'."
+    }
+
+    if ($providerLower -in @("upstox", "fyers")) {
+        if ($SourceTable -match '^broker_(upstox|fyers)\.') {
+            $sourceSchemaProvider = $Matches[1].ToLowerInvariant()
+            if ($sourceSchemaProvider -ne $providerLower) {
+                throw "Provider/schema mismatch: runtime.provider is '$Provider' but replay.source_table is '$SourceTable'. Use broker_${providerLower}.* tables with provider '$Provider'."
+            }
+        }
+
+        if ($OptionsSourceTable -match '^broker_(upstox|fyers)\.') {
+            $optionsSchemaProvider = $Matches[1].ToLowerInvariant()
+            if ($optionsSchemaProvider -ne $providerLower) {
+                throw "Provider/schema mismatch: runtime.provider is '$Provider' but replay.options_source_table is '$OptionsSourceTable'. Use broker_${providerLower}.* tables with provider '$Provider'."
+            }
+        }
     }
 }
 
@@ -294,9 +558,21 @@ Load-StrategyJsonFile $ENV_FILE
 [Environment]::SetEnvironmentVariable("STRATEGY_RUNTIME_CONFIG", $ENV_FILE, 'Process')
 
 # Override date if supplied via param
-if ($Date -ne "") {
-    [Environment]::SetEnvironmentVariable("REPLAY_START_DATE", $Date, 'Process')
-    Write-Host "[INFO] Replay date overridden to: $Date" -ForegroundColor Cyan
+if ($From -ne "" -and $To -ne "" -and $From -ne $To) {
+    Write-Host "[ERROR] Replay mode accepts a single date. Use identical values for -From and -To, or pass only -From." -ForegroundColor Red
+    exit 1
+}
+
+$replayDateOverride = ""
+if ($From -ne "") {
+    $replayDateOverride = $From
+} elseif ($To -ne "") {
+    $replayDateOverride = $To
+}
+
+if ($replayDateOverride -ne "") {
+    [Environment]::SetEnvironmentVariable("REPLAY_START_DATE", $replayDateOverride, 'Process')
+    Write-Host "[INFO] Replay date overridden to: $replayDateOverride" -ForegroundColor Cyan
 }
 
 # Force strategy
@@ -323,13 +599,41 @@ if ([string]::IsNullOrWhiteSpace($feedSrc)) {
     $feedSrc = [Environment]::GetEnvironmentVariable("FEED_SOURCE", 'Process')
 }
 
-$provider    = Get-EnvOrDefault "STRATEGY_RUNTIME_PROVIDER"          "fyers"
+$provider       = Get-EnvOrDefault "STRATEGY_RUNTIME_PROVIDER"          "fyers"
+$tradingProvider = Get-EnvOrDefault "STRATEGY_RUNTIME_TRADING_PROVIDER"  ""
 $symbol      = Get-EnvOrDefault "STRATEGY_RUNTIME_SYMBOL"            ""
+
+# -- Validate trading_provider early --
+if ([string]::IsNullOrWhiteSpace($tradingProvider)) {
+    Write-Host "[ERROR] runtime.trading_provider is not set in the config file." -ForegroundColor Red
+    Write-Host "        Set it to 'paper' for replay/paper trading." -ForegroundColor Yellow
+    Write-Host "        Valid values: paper, upstox, fyers, zerodha"             -ForegroundColor Yellow
+    exit 1
+}
+
 $dataType    = Get-EnvOrDefault "STRATEGY_RUNTIME_REPLAY_DATA_TYPE"  "ohlcv_1m"
+$sourceTableConfig = Get-EnvOrDefault "STRATEGY_RUNTIME_SOURCE_TABLE" ""
+$sourceDataKind = Get-EnvOrDefault "STRATEGY_RUNTIME_SOURCE_DATA_KIND" ""
+$optionsSourceTableConfig = Get-EnvOrDefault "STRATEGY_RUNTIME_OPTIONS_SOURCE_TABLE" ""
 $timeframe   = Get-EnvOrDefault "STRATEGY_RUNTIME_TIMEFRAME"         "1m"
 $indicatorMode = Get-EnvOrDefault "STRATEGY_RUNTIME_INDICATOR_INPUT_MODE" "bars_1m"
 $dataTypeLower = if ([string]::IsNullOrWhiteSpace($dataType)) { "" } else { $dataType.ToLowerInvariant() }
 $indicatorModeLower = if ([string]::IsNullOrWhiteSpace($indicatorMode)) { "" } else { $indicatorMode.ToLowerInvariant() }
+
+try {
+    Invoke-ReplayConfigConsistencyCheck `
+        -FeedSource $feedSrc `
+        -Provider $provider `
+        -DataType $dataType `
+        -SourceDataKind $sourceDataKind `
+        -SourceTable $sourceTableConfig `
+        -OptionsSourceTable $optionsSourceTableConfig
+} catch {
+    Write-Host "[ERROR] Replay config preflight failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-RunSummary "[ERROR] Replay config preflight failed: $($_.Exception.Message)" "Red"
+    exit 1
+}
+
 $preflightTimeframe = if ($dataTypeLower -eq "market_ticks" -and $indicatorModeLower -eq "bars_1m") { "1m" } else { $timeframe }
 $tableName   = Get-ReplayTableName -Provider $provider -DataType $dataType
 $replayWsUrl = Get-EnvOrDefault "STRATEGY_RUNTIME_REPLAY_WS_URL"     "ws://localhost:8765"
@@ -372,11 +676,15 @@ Write-RunSummary "  Provider            : $provider"                            
 Write-RunSummary "  Symbol              : $symbol"                                                      "White"
 Write-RunSummary "  Timeframe           : $timeframe"                                                   "White"
 Write-RunSummary "  Replay Data Type    : $dataType"                                                    "White"
+Write-RunSummary "  Replay Source Kind  : $sourceDataKind"                                             "White"
 Write-RunSummary "  Indicator Input Mode: $indicatorMode"                                               "White"
 Write-RunSummary "  Preflight Timeframe : $preflightTimeframe"                                           "White"
 Write-RunSummary "  Replay Speed        : ${replaySpeed}x"                                              "White"
 Write-RunSummary "  Replay Start Time   : $(if ($startTime) { $startTime } else { '<not set>' })"       "White"
 Write-RunSummary "  Replay End Time     : $(if ($endTime)   { $endTime   } else { '<not set>' })"       "White"
+Write-RunSummary "  Replay Source Table (cfg): $(if ($sourceTableConfig) { $sourceTableConfig } else { '<not set>' })" "White"
+Write-RunSummary "  Replay Options Table (cfg): $(if ($optionsSourceTableConfig) { $optionsSourceTableConfig } else { '<not set>' })" "White"
+Write-RunSummary "  Replay Effective Source Table: $tableName"                                          "White"
 Write-RunSummary "  Replay WS URL       : $replayWsUrl"                                                 "White"
 Write-RunSummary ""
 Write-RunSummary "[PATHS]"
@@ -397,8 +705,19 @@ Write-RunSummary "  Host                : $(if ($dbHost) { $dbHost } else { '<un
 Write-RunSummary "  Port                : $(if ($dbPort) { $dbPort } else { '<unknown>' })"   "White"
 Write-RunSummary "  Name                : $(if ($dbName) { $dbName } else { '<unknown>' })"   "White"
 Write-RunSummary "  User                : $(if ($dbUser) { $dbUser } else { '<unknown>' })"   "White"
-Write-RunSummary "  Replay Source Table : $tableName"                                          "White"
+Write-RunSummary "  Replay Effective Source Table : $tableName"                                "White"
 Write-RunSummary ""
+
+$databaseUrlForPreflight = Get-EnvOrDefault "DATABASE_URL" ""
+try {
+    Invoke-DatabaseReadinessCheck -PythonExe $PYTHON_EXE -DatabaseUrl $databaseUrlForPreflight -DbHost $dbHost -DbPort $dbPort
+} catch {
+    Write-Host "[ERROR] DB preflight failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-RunSummary "[ERROR] DB preflight failed: $($_.Exception.Message)" "Red"
+    exit 1
+}
+Write-RunSummary ""
+
 Write-RunSummary "[EXPECTED BEHAVIOR]"
 Write-RunSummary "  1) Replay engine loads historical bars from the replay source table."                           "White"
 Write-RunSummary "  2) Strategy runtime consumes bars via WebSocket and updates latest_bar in /status."            "White"
@@ -406,8 +725,17 @@ Write-RunSummary "  3) If strategy signals trigger, paper orders/fills appear in
 Write-RunSummary "  4) When replay reaches end, replay.completed becomes true and runtime loop exits cleanly."     "White"
 Write-RunSummary ""
 
+try {
+    Invoke-ReplayPortCleanup -Ports @(8765, 8766) -ConfirmationMode $ConfirmationMode
+} catch {
+    Write-Host "[ERROR] Replay port preflight failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-RunSummary "[ERROR] Replay port preflight failed: $($_.Exception.Message)" "Red"
+    exit 1
+}
+Write-RunSummary ""
+
 # ── Start replay engine ────────────────────────────────────────────────────────
-if (-not $SkipReplayEngine) {
+if ($shouldStartReplayEngine) {
     if (-not (Test-Path $REPLAY_MAIN)) {
         Write-Host "[WARN] Replay engine not found at $REPLAY_MAIN - skipping." -ForegroundColor Yellow
     } else {
@@ -434,6 +762,26 @@ if (-not $SkipReplayEngine) {
 }
 
 # ── Replay preflight data check ───────────────────────────────────────────────
+# Effective config - shows only the parameters that are active for replay mode.
+# collector and telegram sections are inactive when feed_source=replay_ws.
+Write-RunSummary "" ""
+Write-RunSummary "[EFFECTIVE CONFIG - replay_ws mode]" "Cyan"
+Write-RunSummary "  feed_source        : $feedSrc"                                 "White"
+Write-RunSummary "  provider           : $provider  (market data source)"          "White"
+Write-RunSummary "  trading_provider   : $tradingProvider  (forced paper for replay)" "White"
+Write-RunSummary "  symbol             : $symbol"                                  "White"
+Write-RunSummary "  timeframe          : $timeframe"                               "White"
+Write-RunSummary "  replay.data_type   : $dataType"                                "White"
+Write-RunSummary "  replay.source_data_kind: $sourceDataKind"                      "White"
+Write-RunSummary "  replay.source_table (cfg): $(if ($sourceTableConfig) { $sourceTableConfig } else { '<not set>' })" "White"
+Write-RunSummary "  replay.options_source_table (cfg): $(if ($optionsSourceTableConfig) { $optionsSourceTableConfig } else { '<not set>' })" "White"
+Write-RunSummary "  replay.source_table (effective): $tableName"                   "White"
+Write-RunSummary "  replay.start_time  : $startTime"                               "White"
+Write-RunSummary "  replay.end_time    : $endTime"                                 "White"
+Write-RunSummary "  replay.speed       : ${replaySpeed}x"                          "White"
+Write-RunSummary "  [collector/telegram sections are inactive for feed_source=replay_ws]" "DarkGray"
+Write-RunSummary "" ""
+
 Write-RunSummary "[PREFLIGHT] Checking replay data availability..." "Cyan"
 try {
     $uriBuilder = New-Object System.Text.StringBuilder
@@ -470,17 +818,26 @@ try {
         Write-RunSummary "  Expected: /status latest_bar should advance and logs/journal should grow." "Green"
     }
 } catch {
-    Write-RunSummary "  [WARN] Preflight check failed: $($_.Exception.Message)" "Yellow"
-    if ($_.Exception.Response -ne $null) {
+    $preflightErrMsg = $_.Exception.Message
+    $preflightBody   = ""
+    if ($null -ne $_.Exception.Response) {
         try {
             $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-            $body = $reader.ReadToEnd()
-            if (-not [string]::IsNullOrWhiteSpace($body)) {
-                Write-RunSummary "  [WARN] Preflight response body: $body" "Yellow"
-            }
+            $preflightBody = $reader.ReadToEnd()
         } catch {
             # Ignore body parsing failures.
         }
+    }
+    Write-Host ""
+    Write-Host "[WARN] Preflight check failed: $preflightErrMsg" -ForegroundColor Yellow
+    if (-not [string]::IsNullOrWhiteSpace($preflightBody)) {
+        Write-Host "       Response body: $preflightBody"        -ForegroundColor Yellow
+    }
+    Write-Host "       Ensure replay engine HTTP API is reachable at http://localhost:8766/replay/load" -ForegroundColor Yellow
+    Write-Host ""
+    Write-RunSummary "  [WARN] Preflight check failed: $preflightErrMsg" "Yellow"
+    if (-not [string]::IsNullOrWhiteSpace($preflightBody)) {
+        Write-RunSummary "  [WARN] Preflight response body: $preflightBody" "Yellow"
     }
     Write-RunSummary "         Ensure replay engine HTTP API is reachable at http://localhost:8766/replay/load" "Yellow"
 }
@@ -556,7 +913,7 @@ try {
         Write-RunSummary "[STOP] Stopping strategy runtime PID $($runtimeProc.Id)" "Yellow"
         Stop-Process -Id $runtimeProc.Id -Force -ErrorAction SilentlyContinue
     }
-    if (-not $SkipReplayEngine -and $null -ne $replayProc -and -not $replayProc.HasExited) {
+    if ($shouldStartReplayEngine -and $null -ne $replayProc -and -not $replayProc.HasExited) {
         Write-Host ""
         Write-Host "[INFO] Stopping replay engine (PID $($replayProc.Id))..." -ForegroundColor Yellow
         Write-RunSummary "[STOP] Stopping replay engine PID $($replayProc.Id)" "Yellow"

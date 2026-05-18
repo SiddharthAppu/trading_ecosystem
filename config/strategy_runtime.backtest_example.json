@@ -2,7 +2,7 @@
     "runtime":  {
                     "provider":  "fyers",
                     "timeframe":  "5m",
-                    "feed_source":  "replay_ws",
+                    "feed_source":  "offline_adapter",
                     "symbol":  "NSE:NIFTY50-INDEX",
                     "trading_provider":  "paper"
                 },
@@ -25,9 +25,13 @@
                  "lot_quantity":  1,
                  "max_position_lots":  1
              },
-    "replay":  {
-
-               },
+    "backtest":  {
+                     "source_table":  "broker_fyers.ohlcv_1m",
+                     "source_data_kind":  "bars",
+                     "options_source_table":  "broker_fyers.options_ohlc_1m",
+                     "db_chunking_trading_days":  5,
+                     "max_rows_per_chunk":  100000
+                 },
     "collector":  {
 
                   },

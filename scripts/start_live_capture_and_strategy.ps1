@@ -1,9 +1,27 @@
 #Requires -Version 5.1
+<#
+.SYNOPSIS
+    Start live capture and strategy runtime together.
+
+.DESCRIPTION
+    Starts data collector, master recorder, and live-paper strategy runtime.
+
+    Parameter convention:
+    - Canonical: StrategyConfig, Strategy, AuthMode, SkipAuthCheck
+    - Legacy aliases: EnvFile -> StrategyConfig, StrategyName -> Strategy,
+      NonInteractiveAuth -> AuthMode non-interactive
+#>
 param(
+    [Alias("StrategyName")]
     [string]$Strategy = "ema_cross",
-    [string]$EnvFile = "",
+    [Alias("EnvFile")]
+    [string]$StrategyConfig = "",
     [int]$StrikeCount = 21,
-    [switch]$SkipAuthCheck
+    [switch]$SkipAuthCheck,
+    [ValidateSet("interactive", "non-interactive")]
+    [string]$AuthMode = "interactive",
+    [Alias("NonInteractiveAuth")]
+    [switch]$NonInteractiveAuth
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,9 +60,16 @@ Start-Process -FilePath $PYTHON_EXE_COLLECTOR -ArgumentList $recorderArgs -Worki
 
 # 3. Start Strategy Runtime
 Write-Host "[3/3] Starting Strategy Runtime ($Strategy)..."
-$runtimeEnv = if ($EnvFile) { $EnvFile } else { "config\strategy_runtime.$Strategy.paper_live.json" }
-$runtimeArgs = @("$PSScriptRoot\start_strategy_runtime_live_paper.ps1", "-Strategy", $Strategy, "-EnvFile", $runtimeEnv)
+$runtimeEnv = if ($StrategyConfig) { $StrategyConfig } else { "config\strategy_runtime.$Strategy.paper_live.json" }
+$runtimeArgs = @("$PSScriptRoot\start_strategy_runtime_live_paper.ps1", "-Strategy", $Strategy, "-StrategyConfig", $runtimeEnv)
 if ($SkipAuthCheck) { $runtimeArgs += "-SkipAuthCheck" }
+if ($NonInteractiveAuth) {
+    $runtimeArgs += "-AuthMode"
+    $runtimeArgs += "non-interactive"
+} else {
+    $runtimeArgs += "-AuthMode"
+    $runtimeArgs += $AuthMode
+}
 
 # We launch the runtime in the current window as it's the primary interactive component
 & powershell.exe -File @runtimeArgs

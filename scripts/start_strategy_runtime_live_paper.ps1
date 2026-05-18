@@ -1,8 +1,25 @@
 #Requires -Version 5.1
+<#
+.SYNOPSIS
+    Start strategy runtime in live-paper mode.
+
+.DESCRIPTION
+    Launches strategy runtime with optional broker auth pre-check.
+
+    Parameter convention:
+    - Canonical: StrategyConfig, Strategy, AuthMode, SkipAuthCheck
+    - Legacy aliases: EnvFile -> StrategyConfig, StrategyName -> Strategy,
+      NonInteractiveAuth -> AuthMode non-interactive
+#>
 param(
-    [string]$EnvFile = "",
+    [Alias("EnvFile")]
+    [string]$StrategyConfig = "",
+    [Alias("StrategyName")]
     [string]$Strategy = "ema_cross",
     [switch]$SkipAuthCheck,
+    [ValidateSet("interactive", "non-interactive")]
+    [string]$AuthMode = "interactive",
+    [Alias("NonInteractiveAuth")]
     [switch]$NonInteractiveAuth
 )
 
@@ -14,6 +31,11 @@ $RUNTIME_SERVER = "$ROOT\services\strategy_runtime\server.py"
 $AUTH_HELPER = "$ROOT\scripts\authenticate_broker.py"
 $LOG_DIR = "$ROOT\logs\strategy_runtime"
 $AUTH_DIR = "$ROOT\config\auth"
+
+$effectiveAuthMode = $AuthMode
+if ($NonInteractiveAuth) {
+    $effectiveAuthMode = "non-interactive"
+}
 
 function Test-PortListening {
     param([int]$Port)
@@ -105,7 +127,7 @@ $defaultStrategyEnv = Join-Path $ROOT "config\strategy_runtime.$Strategy.paper_l
 $defaultNiftyBrokerEnv = Join-Path $ROOT "config\strategy_runtime.nifty_trend_options.live_broker.json.example"
 $defaultGenericEnv = Join-Path $ROOT "config\strategy_runtime.paper_live.json"
 
-if ([string]::IsNullOrWhiteSpace($EnvFile)) {
+if ([string]::IsNullOrWhiteSpace($StrategyConfig)) {
     if (Test-Path $defaultStrategyEnv) {
         $envPath = $defaultStrategyEnv
     }
@@ -121,7 +143,7 @@ if ([string]::IsNullOrWhiteSpace($EnvFile)) {
     }
 }
 else {
-    $envPath = if ([System.IO.Path]::IsPathRooted($EnvFile)) { $EnvFile } else { Join-Path $ROOT $EnvFile }
+    $envPath = if ([System.IO.Path]::IsPathRooted($StrategyConfig)) { $StrategyConfig } else { Join-Path $ROOT $StrategyConfig }
 }
 
 $loadedEnv = Read-JsonConfig -Path $envPath
@@ -185,7 +207,7 @@ if (-not $SkipAuthCheck) {
     Write-Host "Checking broker authentication for provider: $provider"
 
     $authArgs = @($AUTH_HELPER, "--provider", $provider)
-    if ($NonInteractiveAuth) {
+    if ($effectiveAuthMode -eq "non-interactive") {
         $authArgs += "--non-interactive"
     }
 

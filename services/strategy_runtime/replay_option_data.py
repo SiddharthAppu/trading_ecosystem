@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from datetime import datetime
 from datetime import date
@@ -7,6 +9,11 @@ from statistics import median
 from typing import Any
 
 from trading_core.db import DatabaseManager
+
+logger = logging.getLogger(__name__)
+
+# Timeout (seconds) for individual database queries to prevent hangs during backtest intrabar checks.
+QUERY_TIMEOUT_SECONDS = 5.0
 
 
 class ReplayOptionDataResolver:
@@ -49,8 +56,21 @@ class ReplayOptionDataResolver:
             ORDER BY expiry_date ASC;
         """
         pool = await self._pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(sql, as_of_time, as_of_time.date())
+        try:
+            async with pool.acquire() as conn:
+                rows = await asyncio.wait_for(
+                    conn.fetch(sql, as_of_time, as_of_time.date()),
+                    timeout=QUERY_TIMEOUT_SECONDS
+                )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Timeout ({QUERY_TIMEOUT_SECONDS}s) querying option expiries from {self.options_table}; "
+                f"returning empty list to avoid blocking backtest."
+            )
+            return []
+        except Exception as exc:
+            logger.error(f"Error querying option expiries: {exc}; returning empty list.")
+            return []
 
         return [str(row["expiry_date"]) for row in rows if row.get("expiry_date") is not None]
 
@@ -92,8 +112,22 @@ class ReplayOptionDataResolver:
                 expiry_param = datetime.fromisoformat(expiry_date).date()
             except ValueError:
                 expiry_param = expiry_date
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(sql, as_of_time, expiry_param)
+        
+        try:
+            async with pool.acquire() as conn:
+                rows = await asyncio.wait_for(
+                    conn.fetch(sql, as_of_time, expiry_param),
+                    timeout=QUERY_TIMEOUT_SECONDS
+                )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Timeout ({QUERY_TIMEOUT_SECONDS}s) querying option chain for expiry {expiry_date}; "
+                f"returning empty chain to avoid blocking backtest."
+            )
+            return {"atm": 0.0, "spot": 0.0, "symbols": [], "contracts": []}
+        except Exception as exc:
+            logger.error(f"Error querying option chain: {exc}; returning empty chain.")
+            return {"atm": 0.0, "spot": 0.0, "symbols": [], "contracts": []}
 
         if not rows:
             return {"atm": 0.0, "spot": 0.0, "symbols": [], "contracts": []}
@@ -158,8 +192,21 @@ class ReplayOptionDataResolver:
         """
 
         pool = await self._pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(sql, symbols, as_of_time)
+        try:
+            async with pool.acquire() as conn:
+                rows = await asyncio.wait_for(
+                    conn.fetch(sql, symbols, as_of_time),
+                    timeout=QUERY_TIMEOUT_SECONDS
+                )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Timeout ({QUERY_TIMEOUT_SECONDS}s) querying {len(symbols)} option quotes from {self.options_table}; "
+                f"returning empty quotes to avoid blocking backtest intrabar checks."
+            )
+            return []
+        except Exception as exc:
+            logger.error(f"Error querying option quotes: {exc}; returning empty quotes.")
+            return []
 
         by_symbol = {
             str(row["symbol"]): {

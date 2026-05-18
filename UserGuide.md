@@ -62,8 +62,22 @@ To add a new strategy:
 
 ## 🧪 Backtest Kit Notes
 - For standalone replay/backtest/live kit operation, use [Astra_UserGuide.md](Astra_UserGuide.md).
-- Strategy runtime kit configs are JSON files under `config/strategy_runtime*.json` (`.env` strategy configs are legacy).
-- Backtest optimize artifacts are generated under `logs/strategy_runtime/` and `logs/run_summaries/` in the kit directory.
+- **Strategy config files**: Use JSON files under `config/strategy_runtime.*.json` (e.g., `config/strategy_runtime.nifty_trend_options.backtest_bars.json`).
+  - **IMPORTANT**: Use the `-StrategyConfig` parameter in the backtest launcher to specify the config JSON file.
+  - `-EnvFile` is a backward-compatible alias for `-StrategyConfig`; prefer `-StrategyConfig` in all new commands.
+  - Use `-GlobalEnv` for overriding the global `.env` credentials file path.
+  - Legacy `.env` strategy configs are no longer supported in the kit launchers.
+- **Backtest/Offline Adapter Config Structure**:
+  - `runtime`: Strategy runtime settings (feed_source, provider, trading_provider, symbol, timeframe, etc.)
+  - `strategy`: Strategy name, class path, and indicators
+  - `risk`: Risk management settings (capital, lot size, max position, etc.)
+  - **`backtest`**: Offline adapter data source settings (source_table, source_data_kind, options_source_table, db_chunking_trading_days, max_rows_per_chunk)
+  - `strategy_params`: Strategy-specific tunable parameters
+  - `collector` / `telegram`: Inactive for backtest/offline mode (set `feed_source: offline_adapter`)
+- **Replay/Live Kit Config Structure** (different from backtest):
+  - `replay`: Live WebSocket replay settings (ws_url, speed, start_time, end_time, data_type, etc.)
+  - `runtime.feed_source`: Should be `replay_ws` for live replay mode
+- Backtest/optimize artifacts are generated under `logs/strategy_runtime/` and `logs/run_summaries/` in the kit directory.
 - If present in kit root, open these pages for quick navigation:
     - `ARTIFACT_INDEX.html` (all artifacts)
     - `ARTIFACT_INDEX_LATEST_RUN.html` (latest optimize run)

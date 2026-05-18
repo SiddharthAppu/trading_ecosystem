@@ -125,7 +125,7 @@ Ensure replay path remains unchanged.
 2. Launch with:
 
 ```powershell
-powershell -File scripts/start_strategy_runtime_paper_replay.ps1 -Strategy nifty_trend_options -EnvFile config/strategy_runtime.nifty_trend_options.replay_ticks.json.example
+powershell -File scripts/start_strategy_runtime_paper_replay.ps1 -Strategy nifty_trend_options -StrategyConfig config/strategy_runtime.nifty_trend_options.replay_ticks.json.example
 ```
 
 3. Run a known replay window and verify runtime completes normally.

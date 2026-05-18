@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import os
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ from services.strategy_runtime.portfolio import PortfolioManager
 from services.strategy_runtime.replay_option_data import ReplayOptionDataResolver
 from services.strategy_runtime.strategies import load_strategy, load_strategy_params
 from services.strategy_runtime.time_utils import IST, isoformat_ist, now_ist
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -486,14 +489,19 @@ async def _run_strategy_adapter_backtest(
                 break
             # Set current intrabar minute before check_exit so _on_signal can capture it
             last_intrabar_exit_minute = minute_ts
-            await check_exit(
-                provider,
-                as_of_time=minute_ts,
-                force_exit_enabled=force_exit_enabled,
-                force_exit_time_ist=force_exit_time_ist,
-                force_exit_debug_enabled=force_exit_debug_enabled,
-                force_exit_debug_to_journal=force_exit_debug_to_journal,
-            )
+            try:
+                await check_exit(
+                    provider,
+                    as_of_time=minute_ts,
+                    force_exit_enabled=force_exit_enabled,
+                    force_exit_time_ist=force_exit_time_ist,
+                    force_exit_debug_enabled=force_exit_debug_enabled,
+                    force_exit_debug_to_journal=force_exit_debug_to_journal,
+                )
+            except Exception as exc:
+                # Log but do not crash on exit check errors (e.g., DB timeout during intrabar checks).
+                logger.warning(f"Intrabar exit check failed at {minute_ts}: {exc}; continuing backtest.")
+                continue
 
     async def _on_signal(event: SignalEvent) -> None:
         if event.indicator == "force_exit_debug" and isinstance(event.value, dict):

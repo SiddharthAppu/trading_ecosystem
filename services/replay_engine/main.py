@@ -5,6 +5,9 @@ import websockets
 from aiohttp import web
 from trading_core.db import DatabaseManager
 
+# NSE market open = 09:15 IST = 03:45 UTC. Used as the origin for TimescaleDB
+# time_bucket() so that 5m/10m buckets align to 09:15, 09:20, 09:25 …
+MARKET_BUCKET_ORIGIN_UTC = "2000-01-03 03:45:00+00"
 
 
 # Replay Server logic ported to the unified service structure

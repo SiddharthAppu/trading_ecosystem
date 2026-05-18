@@ -100,7 +100,7 @@ Wrapper launcher with env file:
 	powershell -ExecutionPolicy Bypass -File scripts/start_strategy_runtime_paper_replay.ps1 -StartReplayEngine
 
 Optional custom env file path:
-	powershell -ExecutionPolicy Bypass -File scripts/start_strategy_runtime_paper_replay.ps1 -EnvFile config/your_runtime.env -StartReplayEngine
+	powershell -ExecutionPolicy Bypass -File scripts/start_strategy_runtime_paper_replay.ps1 -StrategyConfig config/your_runtime.env -StartReplayEngine
 
 Optional explicit strategy key (used for auto env resolution):
 	powershell -ExecutionPolicy Bypass -File scripts/start_strategy_runtime_paper_replay.ps1 -Strategy ema_cross -StartReplayEngine
